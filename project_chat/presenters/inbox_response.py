@@ -26,4 +26,20 @@ class InboxResponse:
             'error': error_message,
             'error_code': 'INTERNAL_ERROR'
         }
+    
+    @staticmethod
+    def inbox_update_broadcast(conversation_entry: dict) -> Dict[str, Any]:
+        """
+        Format inbox update broadcast.
+        
+        Args:
+            conversation_entry: Dictionary containing conversation inbox entry data
+            
+        Returns:
+            Formatted inbox update broadcast message
+        """
+        return {
+            "type": "inbox.updated",
+            "data": conversation_entry
+        }
 

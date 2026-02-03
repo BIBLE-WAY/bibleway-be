@@ -25,6 +25,11 @@ class CreatePostInteractor:
                         if not media_file or not hasattr(media_file, 'name'):
                             continue
                         
+                        # Validate file type before processing
+                        is_valid, error_message = self.storage.validate_media_file_type(media_file)
+                        if not is_valid:
+                            return self.response.invalid_media_type_response(media_file.name)
+                        
                         media_type = self.storage.get_media_type_from_file(media_file)
                         
                         s3_url = self.storage.upload_file_to_s3(
@@ -38,6 +43,9 @@ class CreatePostInteractor:
                             s3_url=s3_url,
                             media_type=media_type
                         )
+                    except ValueError as e:
+                        # Handle unsupported file type error from _determine_media_type_from_filename
+                        return self.response.invalid_media_type_response(media_file.name if hasattr(media_file, 'name') else None)
                     except Exception as e:
                         return self.response.s3_upload_error_response(str(e))
             

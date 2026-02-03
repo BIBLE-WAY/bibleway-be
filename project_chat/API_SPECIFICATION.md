@@ -665,7 +665,101 @@ Get online/offline status of all members in a conversation.
 
 ---
 
-### 9. Pong (Heartbeat)
+### 9. Get Inbox
+
+Retrieve all conversations for the authenticated user with unread count, latest message, and conversation details.
+
+**Request:**
+```json
+{
+  "action": "get_inbox",
+  "request_id": "unique-uuid-string"
+}
+```
+
+**Required Fields:**
+- No additional fields required (user is authenticated via WebSocket token)
+
+**Success Response:**
+```json
+{
+  "type": "inbox.list",
+  "request_id": "unique-uuid-string",
+  "success": true,
+  "data": [
+    {
+      "conversation_id": "1",
+      "unread_count": 5,
+      "latest_message": {
+        "message_id": "123",
+        "text": "Hello, how are you?",
+        "sender": {
+          "user_id": "uuid",
+          "user_name": "john_doe",
+          "profile_picture_url": ""
+        },
+        "file": null,
+        "created_at": "2024-01-15T10:30:00Z",
+        "is_sent_by_me": false,
+        "is_seen": false
+      },
+      "type": "DIRECT",
+      "other_member": {
+        "user_id": "uuid",
+        "user_name": "jane_smith",
+        "profile_picture_url": ""
+      },
+      "last_activity_at": "2024-01-15T10:30:00Z"
+    }
+  ]
+}
+```
+
+**Response Fields:**
+- `conversation_id` (string): Unique conversation identifier
+- `unread_count` (integer): Number of unread messages (excludes messages sent by current user)
+- `latest_message` (object|null): Most recent message in the conversation, or null if no messages
+  - `message_id` (string): Message identifier
+  - `text` (string): Message text content
+  - `sender` (object): Sender user information
+  - `file` (object|null): File attachment if present
+  - `created_at` (string): ISO 8601 timestamp
+  - `is_sent_by_me` (boolean): Whether message was sent by current user
+  - `is_seen` (boolean): Whether current user has seen this message
+- `type` (string): Conversation type - "DIRECT" or "GROUP"
+- `other_member` (object|null): Other participant in DIRECT conversation
+- `members` (array): All members in GROUP conversation
+- `members_count` (integer): Number of members in GROUP conversation
+- `last_activity_at` (string): ISO 8601 timestamp of last activity
+
+**Error Response:**
+```json
+{
+  "type": "error",
+  "error": "Failed to retrieve inbox: <error_message>",
+  "error_code": "INTERNAL_ERROR",
+  "request_id": "unique-uuid-string"
+}
+```
+
+**Validation Rules:**
+- User must be authenticated (via WebSocket token)
+- Returns only active conversations where user is a member
+
+**Error Codes:**
+- `INTERNAL_ERROR`: Server error occurred while retrieving inbox
+
+**Notes:**
+- Returns same data structure as HTTP endpoint `/api/chat/inbox/`
+- Conversations are sorted by `last_activity_at` (most recent first)
+- `unread_count` excludes messages sent by the current user
+- `latest_message` is null if conversation has no messages
+- For DIRECT conversations, `other_member` contains the other participant
+- For GROUP conversations, `members` array contains all members
+
+---
+
+### 10. Pong (Heartbeat)
 
 Heartbeat response. Used to keep connection alive.
 
@@ -693,6 +787,7 @@ Broadcasts are messages sent to all members of a conversation (except the sender
 4. **read_receipt.updated** - Read receipt updated
 5. **typing** - Typing indicator
 6. **presence.updated** - Presence status changed (on connect/disconnect)
+7. **inbox.updated** - Inbox entry updated (real-time inbox push)
 
 ### Receiving Broadcasts
 
@@ -701,6 +796,61 @@ To receive broadcasts, users must:
 2. Have joined the conversation group (via `join_conversation` action or automatically when sending messages)
 
 **Note:** The sender of an action does NOT receive the broadcast for that action (they already got the acknowledgment).
+
+### Inbox Updates (inbox.updated)
+
+Inbox updates are automatically pushed to each user through their personal inbox subscription channel (`inbox:{userId}`). Users are automatically subscribed to this channel when they connect via WebSocket.
+
+**When Inbox Updates Are Sent:**
+- When a new message is sent in a conversation
+- When a message is edited
+- When a message is deleted
+- When a user marks messages as read (unread count changes)
+
+**Inbox Update Broadcast:**
+```json
+{
+  "type": "inbox.updated",
+  "data": {
+    "conversation_id": "1",
+    "unread_count": 5,
+    "latest_message": {
+      "message_id": "123",
+      "text": "Hello!",
+      "sender": {
+        "user_id": "uuid",
+        "user_name": "john_doe",
+        "profile_picture_url": "https://..."
+      },
+      "file": null,
+      "created_at": "2024-01-15T10:30:00Z",
+      "is_sent_by_me": false,
+      "is_seen": false
+    },
+    "type": "DIRECT",
+    "other_member": {
+      "user_id": "uuid",
+      "user_name": "jane_smith",
+      "profile_picture_url": "https://..."
+    },
+    "last_activity_at": "2024-01-15T10:30:00Z"
+  }
+}
+```
+
+**Key Features:**
+- **User-Specific Unread Count:** Each user receives their own unread count based on their read state
+- **Sender Unread Count:** When a user sends a message, they receive an inbox update with `unread_count = 0`
+- **Receiver Unread Count:** When a user receives a message, their inbox update has an incremented `unread_count`
+- **Automatic Subscription:** No action required from client - subscription happens automatically on WebSocket connection
+- **Real-Time Updates:** Inbox updates are pushed immediately when conversation state changes
+
+**Frontend Handling:**
+When receiving `inbox.updated` broadcasts, the frontend should:
+1. Update the conversation entry in the inbox list
+2. Update the unread count badge
+3. Update the latest message preview
+4. Re-sort the inbox list by `last_activity_at` if needed
 
 ---
 

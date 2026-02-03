@@ -8,10 +8,7 @@ class UpdatePostInteractor:
         self.storage = storage
         self.response = response
 
-    def update_post_interactor(self, post_id: str, user_id: str, title: str = None, description: str = None) -> Response:
-        if title is None and description is None:
-            return self.response.validation_error_response("At least one field (title or description) must be provided")
-        
+    def update_post_interactor(self, post_id: str, user_id: str, title: str = None, description: str = None, media_urls: list = None) -> Response:
         try:
             post = self.storage.get_post_by_id(post_id)
             if not post:
@@ -21,7 +18,8 @@ class UpdatePostInteractor:
                 post_id=post_id,
                 user_id=user_id,
                 title=title,
-                description=description
+                description=description,
+                media_urls=media_urls
             )
             
             return self.response.post_updated_successfully_response(str(updated_post.post_id))

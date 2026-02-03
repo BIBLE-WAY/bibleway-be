@@ -19,7 +19,7 @@ from project_chat.presenters.conversation_response import ConversationResponse
 from project_chat.presenters.inbox_response import InboxResponse
 from project_chat.presenters.chat_error_response import ChatErrorResponse
 import uuid
-from datetime import datetime
+from django.utils import timezone
 
 
 class ChatFileUploadView(APIView):
@@ -74,7 +74,7 @@ class ChatFileUploadView(APIView):
             
             # Generate unique identifier for file
             file_uuid = str(uuid.uuid4())
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = timezone.now().strftime("%Y%m%d_%H%M%S")
             unique_filename = f"{timestamp}_{file_uuid}_{file_obj.name}"
             
             # Upload to S3
@@ -86,6 +86,7 @@ class ChatFileUploadView(APIView):
                     conversation_id=conversation_id,
                     content_type=file_obj.content_type
                 )
+                # upload_chat_file_to_s3 already returns a public URL
             except Exception as e:
                 return Response({
                     "success": False,
@@ -93,7 +94,7 @@ class ChatFileUploadView(APIView):
                     "error_code": ErrorCodes.FILE_UPLOAD_FAILED
                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             
-            # Return success response
+            # Return success response with public URL
             return Response({
                 "success": True,
                 "data": {

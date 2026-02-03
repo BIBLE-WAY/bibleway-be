@@ -10,6 +10,7 @@ try:
     FIREBASE_AVAILABLE = True
 except ImportError:
     FIREBASE_AVAILABLE = False
+    firebase_admin = None
 
 load_dotenv()
 
@@ -22,7 +23,26 @@ SECRET_KEY = os.getenv(
 
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = ["*"]  # DEV ONLY
+ALLOWED_HOSTS = [
+    "bibleway.io",
+    "www.bibleway.io",
+    "api.bibleway.io",
+    "www.api.bibleway.io",
+    "13.201.42.31",  # ✅ AWS EC2 IP address
+    "127.0.0.1",
+    "localhost",
+]
+
+# -------------------------------------------------------------------
+# DATA UPLOAD SETTINGS
+# -------------------------------------------------------------------
+# Increase limits for large data uploads (e.g., bulk chapter creation)
+# 500MB limit (524288000 bytes)
+DATA_UPLOAD_MAX_MEMORY_SIZE = 524288000
+# No limit on number of fields (set to a very large number)
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 10000
+# 500MB limit for file uploads in memory
+FILE_UPLOAD_MAX_MEMORY_SIZE = 524288000
 
 # -------------------------------------------------------------------
 # APPLICATIONS
@@ -48,10 +68,11 @@ INSTALLED_APPS = [
 # MIDDLEWARE (ORDER MATTERS!)
 # -------------------------------------------------------------------
 MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',  
+    'corsheaders.middleware.CorsMiddleware',  # MUST BE FIRST
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
+    'bible_way.middleware.DisableCSRFForAPI',  # ✅ Custom middleware to exempt API endpoints (MUST BE BEFORE CSRF)
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
@@ -61,28 +82,93 @@ MIDDLEWARE = [
 # -------------------------------------------------------------------
 # CORS CONFIGURATION (FOR FRONTEND)
 # -------------------------------------------------------------------
+# ✅ TEMPORARY: Allow all origins for debugging
+# Once working, restrict to specific domains
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
+
+# Only allow requests from bibleway.io domains (not used when ALLOW_ALL is True)
+# CORS_ALLOWED_ORIGINS = [
+#     "https://bibleway.io",
+#     "https://www.bibleway.io",
+#     "http://bibleway.io",
+#     "http://www.bibleway.io",
+#     "http://13.201.42.31",
+# ]
+
+# Explicitly allow all methods and headers for maximum compatibility
+CORS_ALLOW_METHODS = [
+    'DELETE',
+    'GET',
+    'OPTIONS',
+    'PATCH',
+    'POST',
+    'PUT',
+]
 
 CORS_ALLOW_HEADERS = [
     'accept',
     'accept-encoding',
+    'accept-language',
     'authorization',
     'content-type',
+    'content-length',
     'dnt',
     'origin',
+    'referer',
     'user-agent',
     'x-csrftoken',
     'x-requested-with',
-    'ngrok-skip-browser-warning',  # IMPORTANT
+    'x-forwarded-for',
+    'x-forwarded-proto',
+    'cache-control',
+    'pragma',
+    # ✅ Additional headers for modern browsers
+    'sec-ch-ua',
+    'sec-ch-ua-mobile',
+    'sec-ch-ua-platform',
+    # ✅ Ngrok header (if using ngrok for testing)
+    'ngrok-skip-browser-warning',
 ]
 
-# -------------------------------------------------------------------
-# CSRF CONFIG (NGROK)
-# -------------------------------------------------------------------
-CSRF_TRUSTED_ORIGINS = [
-    "https://*.ngrok-free.app",
+# Expose headers that frontend might need to read
+CORS_EXPOSE_HEADERS = [
+    'content-type',
+    'authorization',
+    'x-csrftoken',
 ]
+
+# Cache preflight requests for 1 hour
+CORS_PREFLIGHT_MAX_AGE = 3600
+
+# -------------------------------------------------------------------
+# CSRF CONFIG
+# -------------------------------------------------------------------
+# Allow all origins - Configure CSRF to be maximally permissive
+# Note: Django doesn't support wildcards in CSRF_TRUSTED_ORIGINS
+# For API endpoints using JWT auth, CSRF is not required
+CSRF_TRUSTED_ORIGINS = [
+    "https://bibleway.io",
+    "https://www.bibleway.io",
+    "https://api.bibleway.io",
+    "https://www.api.bibleway.io",
+    "https://www.api.bibleway.io",
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://localhost:8000",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+    "http://127.0.0.1:8000",
+    "http://localhost",
+    "http://127.0.0.1",
+    # Add any other specific origins you need
+]
+# Make CSRF cookies work with all cross-origin requests
+# ✅ CRITICAL: SameSite=None REQUIRES Secure=True (browser requirement)
+CSRF_COOKIE_SECURE = True  # Required when using SameSite=None
+CSRF_COOKIE_SAMESITE = 'None'  # Allow all cross-site requests
+CSRF_USE_SESSIONS = False  # Use cookie-based CSRF tokens
+# CSRF is effectively bypassed for API endpoints via JWT authentication
 
 # -------------------------------------------------------------------
 ROOT_URLCONF = 'bible_way_backend.urls'
@@ -110,10 +196,24 @@ WSGI_APPLICATION = 'bible_way_backend.wsgi.application'
 # ASGI Application for WebSocket support
 ASGI_APPLICATION = 'bible_way_backend.asgi.application'
 
+# Database Configuration
+# Production: AWS RDS MySQL Configuration
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.mysql',
+#         'NAME': os.getenv('DB_NAME'),
+#         'USER': os.getenv('DB_USER'),
+#         'PASSWORD': os.getenv('DB_PASSWORD'),
+#         'HOST': os.getenv('DB_HOST'),
+#         'PORT': os.getenv('DB_PORT'),
+#         'OPTIONS': {
+#             'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
+#             'charset': 'utf8mb4',
+#         }
+#     }
+# }
 
-# Database
-# https://docs.djangoproject.com/en/6.0/ref/settings/#databases
-
+# Local Development: SQLite Configuration (Commented out - uncomment to use locally)
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
@@ -156,10 +256,25 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 # -------------------------------------------------------------------
+# REST FRAMEWORK
+# -------------------------------------------------------------------
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+    'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer',
+    ],
+}
+
+# -------------------------------------------------------------------
 # JWT
 # -------------------------------------------------------------------
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=7),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'USER_ID_FIELD': 'user_id',
     'USER_ID_CLAIM': 'user_id',
@@ -178,23 +293,42 @@ USE_TZ = True
 # -------------------------------------------------------------------
 # STATIC / MEDIA (S3)
 # -------------------------------------------------------------------
-STATIC_URL = 'static/'
+# Static files (CSS, JavaScript, admin files) - served locally via NGINX
+STATIC_URL = '/static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
+# Media files (user uploads) - served from S3
+DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+
+# AWS S3 Configuration (for media files)
 AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID', '')
 AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY', '')
 AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_STORAGE_BUCKET_NAME', '')
 AWS_S3_REGION_NAME = os.getenv('AWS_S3_REGION_NAME', 'us-east-1')
 AWS_DEFAULT_ACL = 'public-read'
 
-DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
-STATICFILES_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+# S3 Presigned URL Configuration
+AWS_S3_PRESIGNED_URL_EXPIRATION = int(os.getenv('AWS_S3_PRESIGNED_URL_EXPIRATION', '3600'))  # Default 1 hour
+AWS_S3_USE_PRESIGNED_URLS = os.getenv('AWS_S3_USE_PRESIGNED_URLS', 'False').lower() == 'true'
+
+# AWS SES Configuration for Email
+# Uses the same AWS credentials as S3 (from AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY env vars)
+AWS_SES_REGION = os.getenv('AWS_SES_REGION', 'ap-south-1')  # Default to ap-south-1 (Mumbai)
+AWS_SES_FROM_EMAIL = os.getenv('AWS_SES_FROM_EMAIL', 'noreply@bibleway.com')
+
+# -------------------------------------------------------------------
+# ZEPTOMAIL CONFIGURATION
+# -------------------------------------------------------------------
+ZEPTOMAIL_API_TOKEN = os.getenv('ZEPTOMAIL_API_TOKEN', '')
+ZEPTOMAIL_FROM_EMAIL = os.getenv('ZEPTOMAIL_FROM_EMAIL', 'noreply@linchpinsoftsolution.com')
+ZEPTOMAIL_OTP_EXPIRY_MINUTES = int(os.getenv('ZEPTOMAIL_OTP_EXPIRY_MINUTES', '15'))
 
 # -------------------------------------------------------------------
 # FIREBASE
 # -------------------------------------------------------------------
 CRED_PATH = os.path.join(BASE_DIR, 'serviceAccountKey.json')
 
-if not firebase_admin._apps:
+if FIREBASE_AVAILABLE and firebase_admin and not firebase_admin._apps:
     try:
         cred = credentials.Certificate(CRED_PATH)
         firebase_admin.initialize_app(cred)
@@ -210,7 +344,6 @@ if not firebase_admin._apps:
 
 # Channel Layers Configuration for WebSocket support
 USE_REDIS = os.getenv('USE_REDIS', 'false').lower() == 'true'
-REDIS_URL = os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/0')
 
 if USE_REDIS:
     # Production: Redis channel layer
@@ -218,8 +351,7 @@ if USE_REDIS:
         "default": {
             "BACKEND": "channels_redis.core.RedisChannelLayer",
             "CONFIG": {
-                # Use URL so host/port/db/password can be configured per environment
-                "hosts": [REDIS_URL],
+                "hosts": [("127.0.0.1", 6379)],
                 "capacity": 1500,
                 "expiry": 60,
             },
@@ -232,3 +364,14 @@ else:
             "BACKEND": "channels.layers.InMemoryChannelLayer",
         },
     }
+
+# -------------------------------------------------------------------
+# ELASTICSEARCH CONFIGURATION
+# -------------------------------------------------------------------
+ELASTICSEARCH_HOST = os.getenv('ELASTICSEARCH_HOST', 'localhost')
+ELASTICSEARCH_PORT = int(os.getenv('ELASTICSEARCH_PORT', '9200'))
+ELASTICSEARCH_USE_SSL = os.getenv('ELASTICSEARCH_USE_SSL', 'False').lower() == 'true'
+ELASTICSEARCH_VERIFY_CERTS = os.getenv('ELASTICSEARCH_VERIFY_CERTS', 'True').lower() == 'true'
+ELASTICSEARCH_USERNAME = os.getenv('ELASTICSEARCH_USERNAME', '')
+ELASTICSEARCH_PASSWORD = os.getenv('ELASTICSEARCH_PASSWORD', '')
+ELASTICSEARCH_INDEX_NAME = os.getenv('ELASTICSEARCH_INDEX_NAME', 'chapters_index')

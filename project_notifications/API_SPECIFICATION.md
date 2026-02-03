@@ -1,711 +1,657 @@
-# Project Notifications - Complete API Specification
+# Notifications API Specification
 
 ## Overview
 
-The Project Notifications API provides notification functionality for user interactions (follows, likes, messages, comments). Notifications are automatically created via Django signals when events occur, and can be retrieved via REST API or received in real-time via WebSocket.
+The Notifications API provides real-time WebSocket-based notifications for user activities including follows, likes, comments, and prayer requests. All notifications are delivered instantly via WebSocket connections with automatic aggregation support. Notifications are delivered through the unified `ws/user/` WebSocket connection along with chat messages.
 
-**HTTP Base URL:** `http://your-domain/api/notifications/`
+**Base WebSocket URL:**
+```
+ws://localhost:8000/ws/user/
+```
 
-**WebSocket Base URL:** `ws://your-domain/ws/user/` (shared with chat WebSocket)
+**Production URL:**
+```
+wss://your-domain.com/ws/user/
+```
 
-**Authentication:** JWT token required for all endpoints
-- HTTP: `Authorization: Bearer <JWT_TOKEN>` header
-- WebSocket: `?token=<JWT_TOKEN>` query parameter
+**REST API Base URL:**
+```
+http://localhost:8000/api/notifications/
+```
 
 ---
 
 ## Table of Contents
 
-1. [REST API](#rest-api)
-2. [WebSocket Integration](#websocket-integration)
-3. [Notification Types](#notification-types)
-4. [Data Models](#data-models)
-5. [Notification Creation](#notification-creation)
-6. [Fetch Tracking](#fetch-tracking)
-7. [Aggregation](#aggregation)
-8. [Error Handling](#error-handling)
-9. [Examples](#examples)
+1. [Authentication](#authentication)
+2. [WebSocket Connection](#websocket-connection)
+3. [REST API Endpoints](#rest-api-endpoints)
+4. [Message Formats](#message-formats)
+5. [Notification Types](#notification-types)
+6. [Client Actions](#client-actions)
+7. [Error Handling](#error-handling)
+8. [Read/Unread Tracking](#readunread-tracking)
 
 ---
 
-## REST API
+## Authentication
 
-### GET `/api/notifications/`
+All WebSocket connections require JWT authentication via query parameter.
 
-Retrieve notifications for the authenticated user. The endpoint uses fetch tracking to determine which notifications to return.
+**WebSocket Connection URL Format:**
+```
+ws://domain/ws/user/?token=<access_token>
+```
 
-**Authentication:** Required (JWT token in Authorization header)
+**REST API Authentication:**
+- Include JWT access token in `Authorization` header: `Bearer <access_token>`
+- Token must be valid and not expired
+- User must be authenticated and active
 
-**Request:**
-- Method: `GET`
-- Headers:
-  - `Authorization: Bearer <JWT_TOKEN>`
-- Query Parameters: None (all parameters are handled automatically)
+**WebSocket Authentication:**
+- Include JWT access token in the `token` query parameter
+- Token must be valid and not expired
+- User must be authenticated and active
 
-**Behavior:**
-- **First Call:** Returns all notifications the user has ever received
-- **Subsequent Calls:** Returns only notifications created after the last fetch time
-- **Automatic Tracking:** The last fetch time is automatically updated after each successful call
+**Example:**
+```
+ws://localhost:8000/ws/user/?token=eyJ0eXAiOiJKV1QiLCJhbGc...
+```
 
-**Response (Success - 200 OK):**
+---
 
+## WebSocket Connection
+
+### Connection Flow
+
+1. Client initiates WebSocket connection to unified `ws/user/` endpoint with JWT token
+2. Server validates token and authenticates user
+3. Server accepts connection and sends connection confirmation
+4. Client automatically joins both chat groups and notification group (`user_{user_id}_notifications`)
+5. Client receives both chat messages and notifications in real-time through the same connection
+6. Client calls `GET /api/notifications/missed/` to fetch unread notifications created while offline
+
+### Connection Established Message
+
+Upon successful connection, the server sends:
+
+```json
+{
+  "type": "connection.established",
+  "data": {
+    "user_id": "uuid-string",
+    "message": "WebSocket connection established"
+  }
+}
+```
+
+Note: This is the same connection message used for chat, as notifications are delivered through the unified WebSocket connection.
+
+### Connection Rejection
+
+If authentication fails, the connection is closed with code `4008` (Policy violation - authentication required).
+
+---
+
+## REST API Endpoints
+
+### GET /api/notifications/missed/
+
+Fetch unread notifications that were created while the user was offline.
+
+**Authentication:** JWT token in `Authorization` header
+
+**Query Parameters:**
+- `limit` (optional): Number of notifications to return (default: 50, max: 100)
+
+**Response (200 OK):**
 ```json
 {
   "success": true,
   "data": {
     "notifications": [
       {
-        "notification_id": "550e8400-e29b-41d4-a716-446655440000",
-        "type": "POST_LIKE",
-        "actor": {
-          "user_id": "123e4567-e89b-12d3-a456-426614174000",
-          "user_name": "John Doe",
-          "profile_picture_url": "https://example.com/profile.jpg"
-        },
-        "actors_count": 5,
-        "actors": [
-          "123e4567-e89b-12d3-a456-426614174000",
-          "223e4567-e89b-12d3-a456-426614174001",
-          "323e4567-e89b-12d3-a456-426614174002",
-          "423e4567-e89b-12d3-a456-426614174003",
-          "523e4567-e89b-12d3-a456-426614174004"
-        ],
-        "target_id": "post-uuid-123",
+        "type": "notification",
+        "notification_id": "uuid-string",
+        "notification_type": "POST_LIKE",
+        "message": "john_doe liked your post",
+        "target_id": "post-uuid",
         "target_type": "post",
-        "conversation_id": null,
-        "message_id": null,
-        "created_at": "2024-01-15T10:30:00Z",
-        "metadata": {
-          "actors_count": 5,
-          "actors": [
-            "123e4567-e89b-12d3-a456-426614174000",
-            "223e4567-e89b-12d3-a456-426614174001",
-            "323e4567-e89b-12d3-a456-426614174002",
-            "423e4567-e89b-12d3-a456-426614174003",
-            "523e4567-e89b-12d3-a456-426614174004"
-          ],
-          "last_actor_id": "523e4567-e89b-12d3-a456-426614174004"
-        }
-      },
-      {
-        "notification_id": "660e8400-e29b-41d4-a716-446655440001",
-        "type": "FOLLOW",
         "actor": {
-          "user_id": "789e4567-e89b-12d3-a456-426614174005",
-          "user_name": "Jane Smith",
-          "profile_picture_url": "https://example.com/jane.jpg"
+          "user_id": "uuid-string",
+          "user_name": "john_doe",
+          "profile_picture_url": "https://..."
         },
-        "actors_count": 1,
-        "actors": ["789e4567-e89b-12d3-a456-426614174005"],
-        "target_id": "user-uuid-456",
-        "target_type": "user",
-        "conversation_id": null,
-        "message_id": null,
-        "created_at": "2024-01-15T09:15:00Z",
-        "metadata": {
-          "actors_count": 1,
-          "actors": ["789e4567-e89b-12d3-a456-426614174005"],
-          "last_actor_id": "789e4567-e89b-12d3-a456-426614174005"
-        }
-      },
-      {
-        "notification_id": "770e8400-e29b-41d4-a716-446655440002",
-        "type": "NEW_MESSAGE",
-        "actor": {
-          "user_id": "999e4567-e89b-12d3-a456-426614174006",
-          "user_name": "Bob Wilson",
-          "profile_picture_url": "https://example.com/bob.jpg"
-        },
-        "actors_count": 1,
-        "actors": ["999e4567-e89b-12d3-a456-426614174006"],
-        "target_id": "conversation-123",
-        "target_type": "conversation",
-        "conversation_id": 123,
-        "message_id": 456,
-        "created_at": "2024-01-15T08:00:00Z",
-        "metadata": {
-          "actors_count": 1,
-          "actors": ["999e4567-e89b-12d3-a456-426614174006"],
-          "last_actor_id": "999e4567-e89b-12d3-a456-426614174006"
-        }
+        "metadata": {...},
+        "created_at": "2024-01-15T10:30:00Z"
       }
     ],
-    "total_count": 3
+    "count": 5,
+    "last_fetch_at": "2024-01-15T10:30:00Z"
   }
 }
 ```
 
-**Response (Error - 401 Unauthorized):**
+**Behavior:**
+- Only returns notifications where `is_read = False`
+- Filters by `created_at > last_fetch_at` (or last 24 hours if first time)
+- Updates `last_fetch_at` after successful fetch
+- Notifications are ordered by `created_at` (oldest first)
 
+**Error Responses:**
+- `401 Unauthorized`: Invalid or missing JWT token
+- `500 Internal Server Error`: Server error
+
+### POST /api/notifications/markread/
+
+Mark all notifications as read for the authenticated user.
+
+**Authentication:** JWT token in `Authorization` header
+
+**Request Body:** Empty (no body required)
+
+**Response (200 OK):**
 ```json
 {
-  "detail": "Authentication credentials were not provided."
-}
-```
-
-**Response (Error - 500 Internal Server Error):**
-
-```json
-{
-  "success": false,
-  "error": "Internal server error message",
-  "error_code": "SERVER_ERROR"
-}
-```
-
-**Notes:**
-- Notifications are ordered by `created_at` in descending order (newest first)
-- The `total_count` represents the number of notifications returned in this response
-- On first call, `total_count` equals the total number of notifications the user has ever received
-- On subsequent calls, `total_count` equals the number of new notifications since last fetch
-- The fetch tracker is automatically updated after a successful response
-
----
-
-## WebSocket Integration
-
-### Connection
-
-Notifications are delivered in real-time via the existing chat WebSocket connection. When a user connects to the chat WebSocket, they automatically join their notification group.
-
-**WebSocket Endpoint:** `ws://your-domain/ws/user/?token=<JWT_TOKEN>`
-
-**Connection Details:**
-- Same WebSocket connection used for chat functionality
-- User automatically joins `notification_{user_id}` group on connection
-- No additional connection setup required
-
-### Receiving Notifications
-
-When a notification is created, it is automatically broadcast to the recipient's WebSocket group. The client receives a message with type `notification.new`.
-
-**WebSocket Message Format:**
-
-```json
-{
-  "type": "notification.new",
+  "success": true,
   "data": {
-    "notification": {
-      "notification_id": "550e8400-e29b-41d4-a716-446655440000",
-      "type": "POST_LIKE",
-      "actor": {
-        "user_id": "123e4567-e89b-12d3-a456-426614174000",
-        "user_name": "John Doe",
-        "profile_picture_url": "https://example.com/profile.jpg"
-      },
-      "actors_count": 3,
-      "actors": [
-        "123e4567-e89b-12d3-a456-426614174000",
-        "223e4567-e89b-12d3-a456-426614174001",
-        "323e4567-e89b-12d3-a456-426614174002"
-      ],
-      "target_id": "post-uuid-123",
-      "target_type": "post",
-      "conversation_id": null,
-      "message_id": null,
-      "created_at": "2024-01-15T10:30:00Z",
-      "metadata": {
-        "actors_count": 3,
-        "actors": [
-          "123e4567-e89b-12d3-a456-426614174000",
-          "223e4567-e89b-12d3-a456-426614174001",
-          "323e4567-e89b-12d3-a456-426614174002"
-        ],
-        "last_actor_id": "323e4567-e89b-12d3-a456-426614174002"
-      }
-    }
+    "message": "All notifications marked as read",
+    "marked_count": 10
   }
 }
 ```
 
-**Client Implementation Example (JavaScript):**
+**Behavior:**
+- Marks ALL notifications for the authenticated user as `is_read = True`
+- Uses bulk update for performance
+- Returns count of notifications that were marked
 
-```javascript
-const ws = new WebSocket('ws://your-domain/ws/user/?token=' + jwtToken);
-
-ws.onmessage = function(event) {
-  const message = JSON.parse(event.data);
-  
-  if (message.type === 'notification.new') {
-    const notification = message.data.notification;
-    console.log('New notification:', notification);
-    // Handle notification display
-    displayNotification(notification);
-  }
-  
-  // Handle other message types (chat messages, etc.)
-};
-```
-
-**Notes:**
-- Notifications are broadcast immediately when created (via Django signals)
-- If the user is not connected to WebSocket, the notification will still be available via REST API
-- WebSocket notifications are the same format as REST API notifications
-- Aggregated notifications (e.g., multiple likes) are broadcast when updated
+**Error Responses:**
+- `401 Unauthorized`: Invalid or missing JWT token
+- `500 Internal Server Error`: Server error
 
 ---
 
-## Notification Types
+## Read/Unread Tracking
 
-The following notification types are supported:
+All notifications default to `is_read = False` when created. The system tracks read/unread status:
 
-| Type | Description | Target Type | Example |
-|------|-------------|-------------|---------|
-| `FOLLOW` | User followed another user | `user` | "John Doe started following you" |
-| `POST_LIKE` | Post was liked | `post` | "5 people liked your post" |
-| `COMMENT_LIKE` | Comment was liked | `comment` | "3 people liked your comment" |
-| `PRAYER_REQUEST_LIKE` | Prayer request was liked | `prayer_request` | "2 people liked your prayer request" |
-| `VERSE_LIKE` | Verse was liked | `verse` | "1 person liked your verse" |
-| `NEW_MESSAGE` | New message in conversation | `conversation` | "Bob Wilson sent you a message" |
-| `COMMENT_ON_POST` | Comment added to post | `post` | "Jane Smith commented on your post" |
-| `COMMENT_ON_PRAYER_REQUEST` | Comment added to prayer request | `prayer_request` | "John Doe commented on your prayer request" |
+- **New notifications:** Created with `is_read = False`
+- **WebSocket delivery:** Real-time notifications are delivered with `is_read = False`
+- **Missed notifications:** Only unread notifications are returned by `GET /api/notifications/missed/`
+- **Mark as read:** `POST /api/notifications/markread/` marks all user's notifications as read
 
-**Notification Type Values:**
-- `FOLLOW`
-- `POST_LIKE`
-- `COMMENT_LIKE`
-- `PRAYER_REQUEST_LIKE`
-- `VERSE_LIKE`
-- `NEW_MESSAGE`
-- `COMMENT_ON_POST`
-- `COMMENT_ON_PRAYER_REQUEST`
+**Best Practice:**
+1. Connect to `ws/user/` WebSocket for real-time notifications
+2. On app startup/reconnect, call `GET /api/notifications/missed/` to fetch unread missed notifications
+3. When user views notifications, call `POST /api/notifications/markread/` to mark all as read
+4. Subsequent calls to `GET /api/notifications/missed/` will only return new unread notifications
 
 ---
 
-## Data Models
+## Message Formats
 
-### Notification Object
+### Incoming Messages (Server → Client)
 
-```typescript
-interface Notification {
-  notification_id: string;        // UUID
-  type: string;                   // Notification type (see Notification Types)
-  actor: Actor | null;            // User who triggered the notification
-  actors_count: number;           // Number of actors (for aggregated notifications)
-  actors: string[];               // Array of actor user IDs (for aggregated notifications)
-  target_id: string;              // ID of the target object (post_id, comment_id, etc.)
-  target_type: string;            // Type of target (post, comment, message, etc.)
-  conversation_id: number | null; // For message notifications
-  message_id: number | null;      // For message notifications
-  created_at: string;             // ISO 8601 datetime
-  metadata: {                     // Additional metadata
-    actors_count: number;
-    actors: string[];
-    last_actor_id: string;
-  };
-}
+All notification messages follow this structure:
 
-interface Actor {
-  user_id: string;                // UUID
-  user_name: string;              // Display name
-  profile_picture_url: string;    // Profile picture URL (empty string if none)
-}
-```
-
-### API Response Structure
-
-```typescript
-interface GetNotificationsResponse {
-  success: boolean;
-  data: {
-    notifications: Notification[];
-    total_count: number;
-  };
-}
-
-interface ErrorResponse {
-  success: false;
-  error: string;
-  error_code: string;
-}
-```
-
----
-
-## Notification Creation
-
-Notifications are **automatically created** via Django signals when events occur. There is **no HTTP endpoint** for creating notifications.
-
-### Automatic Creation Triggers
-
-1. **Follow Notification (`FOLLOW`)**
-   - Triggered when: `UserFollowers` model is created
-   - Recipient: The user being followed
-   - Actor: The user who initiated the follow
-   - Self-follows are skipped
-
-2. **Like Notifications (`POST_LIKE`, `COMMENT_LIKE`, `PRAYER_REQUEST_LIKE`, `VERSE_LIKE`)**
-   - Triggered when: `Reaction` model is created with `reaction_type = 'LIKE'`
-   - Recipient: The owner of the liked content
-   - Actor: The user who liked the content
-   - Self-likes are skipped
-   - **Aggregation:** Multiple likes on the same content are aggregated into a single notification
-
-3. **Message Notification (`NEW_MESSAGE`)**
-   - Triggered when: `Message` model is created
-   - Recipient: All members of the conversation (except the sender)
-   - Actor: The message sender
-   - Self-messages are skipped
-
-4. **Comment Notifications (`COMMENT_ON_POST`, `COMMENT_ON_PRAYER_REQUEST`)**
-   - Triggered when: Comment is created on a post or prayer request
-   - Recipient: The owner of the post/prayer request
-   - Actor: The user who commented
-   - Self-comments are skipped
-
----
-
-## Fetch Tracking
-
-The system automatically tracks when each user last fetched their notifications using the `NotificationFetchTracker` model.
-
-### How It Works
-
-1. **First API Call:**
-   - No `NotificationFetchTracker` exists for the user
-   - System creates a tracker with `last_fetch_at = null`
-   - Returns all notifications the user has ever received
-   - Updates `last_fetch_at` to current timestamp
-
-2. **Subsequent API Calls:**
-   - `NotificationFetchTracker` exists with `last_fetch_at` timestamp
-   - Returns only notifications where `created_at > last_fetch_at`
-   - Updates `last_fetch_at` to current timestamp
-
-### Benefits
-
-- **Efficient:** Only new notifications are returned on subsequent calls
-- **Automatic:** No client-side tracking required
-- **Reliable:** Server-side tracking ensures consistency
-- **Simple:** Single endpoint, no query parameters needed
-
-### Implementation Details
-
-- Each user has a one-to-one relationship with `NotificationFetchTracker`
-- Tracker is automatically created on first API call
-- `last_fetch_at` is updated after each successful API call
-- Timestamps are timezone-aware (UTC)
-
----
-
-## Aggregation
-
-Certain notification types are automatically aggregated to reduce notification spam.
-
-### Aggregated Types
-
-- `POST_LIKE`
-- `COMMENT_LIKE`
-- `PRAYER_REQUEST_LIKE`
-- `VERSE_LIKE`
-
-### How Aggregation Works
-
-1. **First Like:** Creates a new notification with `actors_count = 1`
-2. **Subsequent Likes:** Updates the existing notification instead of creating a new one
-   - Increments `actors_count`
-   - Adds new actor to `actors` array
-   - Updates `last_actor_id` to the latest actor
-   - Updates `actor` field to the latest actor (for display)
-
-3. **Aggregation Criteria:**
-   - Same `recipient`
-   - Same `notification_type`
-   - Same `target_id` and `target_type`
-   - Notification must exist (only aggregates existing notifications)
-
-### Example
-
-**Initial Notification:**
 ```json
 {
-  "notification_id": "550e8400-e29b-41d4-a716-446655440000",
-  "type": "POST_LIKE",
+  "type": "notification",
+  "notification_id": "uuid-string",
+  "notification_type": "FOLLOW|POST_LIKE|COMMENT_LIKE|PRAYER_REQUEST_LIKE|COMMENT_ON_POST|COMMENT_ON_PRAYER_REQUEST|PRAYER_REQUEST_CREATED",
+  "message": "Human-readable notification message",
+  "target_id": "uuid-string",
+  "target_type": "user|post|comment|prayer_request",
   "actor": {
-    "user_id": "user-1",
-    "user_name": "Alice"
+    "user_id": "uuid-string",
+    "user_name": "string",
+    "profile_picture_url": "string"
   },
-  "actors_count": 1,
-  "actors": ["user-1"]
-}
-```
-
-**After 4 More Likes:**
-```json
-{
-  "notification_id": "550e8400-e29b-41d4-a716-446655440000",
-  "type": "POST_LIKE",
-  "actor": {
-    "user_id": "user-5",
-    "user_name": "Eve"
+  "metadata": {
+    "actors_count": 1,
+    "actors": ["uuid-string"],
+    "last_actor_id": "uuid-string",
+    "last_actor_name": "string",
+    "is_aggregated": false
   },
-  "actors_count": 5,
-  "actors": ["user-1", "user-2", "user-3", "user-4", "user-5"]
+  "created_at": "2024-01-15T10:30:00Z"
 }
 ```
 
-**Note:** The `actor` field always shows the most recent actor, while `actors` contains all actors who triggered the notification.
+### Outgoing Messages (Client → Server)
 
----
+Clients can send the following actions:
 
-## Error Handling
-
-### HTTP Status Codes
-
-| Code | Description |
-|------|-------------|
-| 200 | Success |
-| 401 | Unauthorized (missing or invalid JWT token) |
-| 500 | Internal server error |
-
-### Error Response Format
+#### Ping (Heartbeat)
 
 ```json
 {
-  "success": false,
-  "error": "Error message description",
-  "error_code": "ERROR_CODE"
+  "action": "ping",
+  "request_id": "optional-request-id"
 }
-```
-
-### Common Error Codes
-
-- `SERVER_ERROR`: Internal server error
-- `VALIDATION_ERROR`: Request validation failed
-- `AUTHENTICATION_ERROR`: Authentication failed
-
-### WebSocket Errors
-
-WebSocket errors follow the same format as chat WebSocket errors:
-
-```json
-{
-  "type": "error",
-  "error": "Error message",
-  "error_code": "ERROR_CODE"
-}
-```
-
----
-
-## Examples
-
-### Example 1: First API Call (Get All Notifications)
-
-**Request:**
-```http
-GET /api/notifications/
-Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 ```
 
 **Response:**
 ```json
 {
-  "success": true,
-  "data": {
-    "notifications": [
-      {
-        "notification_id": "550e8400-e29b-41d4-a716-446655440000",
-        "type": "POST_LIKE",
-        "actor": {
-          "user_id": "123e4567-e89b-12d3-a456-426614174000",
-          "user_name": "John Doe",
-          "profile_picture_url": "https://example.com/john.jpg"
-        },
-        "actors_count": 3,
-        "actors": [
-          "123e4567-e89b-12d3-a456-426614174000",
-          "223e4567-e89b-12d3-a456-426614174001",
-          "323e4567-e89b-12d3-a456-426614174002"
-        ],
-        "target_id": "post-123",
-        "target_type": "post",
-        "conversation_id": null,
-        "message_id": null,
-        "created_at": "2024-01-15T10:30:00Z",
-        "metadata": {
-          "actors_count": 3,
-          "actors": [
-            "123e4567-e89b-12d3-a456-426614174000",
-            "223e4567-e89b-12d3-a456-426614174001",
-            "323e4567-e89b-12d3-a456-426614174002"
-          ],
-          "last_actor_id": "323e4567-e89b-12d3-a456-426614174002"
-        }
-      }
-    ],
-    "total_count": 1
-  }
+  "type": "pong",
+  "request_id": "optional-request-id"
 }
 ```
 
-**Note:** After this call, `last_fetch_at` is set to `2024-01-15T10:30:00Z` (or current time).
+---
 
-### Example 2: Subsequent API Call (Get Only New Notifications)
+## Notification Types
 
-**Request (5 minutes later):**
-```http
-GET /api/notifications/
-Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-```
+### 1. Follow Notification
 
-**Response (if 2 new notifications were created):**
+**Type:** `FOLLOW`
+
+**Trigger:** When a user follows another user
+
+**Message Format:**
+- Single: `"{actor_name} started following you"`
+
+**Payload:**
 ```json
 {
-  "success": true,
-  "data": {
-    "notifications": [
-      {
-        "notification_id": "660e8400-e29b-41d4-a716-446655440001",
-        "type": "FOLLOW",
-        "actor": {
-          "user_id": "789e4567-e89b-12d3-a456-426614174005",
-          "user_name": "Jane Smith",
-          "profile_picture_url": ""
-        },
-        "actors_count": 1,
-        "actors": ["789e4567-e89b-12d3-a456-426614174005"],
-        "target_id": "user-456",
-        "target_type": "user",
-        "conversation_id": null,
-        "message_id": null,
-        "created_at": "2024-01-15T10:33:00Z",
-        "metadata": {
-          "actors_count": 1,
-          "actors": ["789e4567-e89b-12d3-a456-426614174005"],
-          "last_actor_id": "789e4567-e89b-12d3-a456-426614174005"
-        }
-      },
-      {
-        "notification_id": "770e8400-e29b-41d4-a716-446655440002",
-        "type": "NEW_MESSAGE",
-        "actor": {
-          "user_id": "999e4567-e89b-12d3-a456-426614174006",
-          "user_name": "Bob Wilson",
-          "profile_picture_url": "https://example.com/bob.jpg"
-        },
-        "actors_count": 1,
-        "actors": ["999e4567-e89b-12d3-a456-426614174006"],
-        "target_id": "conversation-123",
-        "target_type": "conversation",
-        "conversation_id": 123,
-        "message_id": 789,
-        "created_at": "2024-01-15T10:35:00Z",
-        "metadata": {
-          "actors_count": 1,
-          "actors": ["999e4567-e89b-12d3-a456-426614174006"],
-          "last_actor_id": "999e4567-e89b-12d3-a456-426614174006"
-        }
-      }
-    ],
-    "total_count": 2
-  }
-}
-```
-
-**Note:** Only notifications created after the last fetch time are returned.
-
-### Example 3: WebSocket Notification Reception
-
-**Client Code:**
-```javascript
-const ws = new WebSocket('ws://your-domain/ws/user/?token=' + jwtToken);
-
-ws.onmessage = function(event) {
-  const message = JSON.parse(event.data);
-  
-  if (message.type === 'notification.new') {
-    const notification = message.data.notification;
-    
-    // Display notification
-    showNotificationToast(notification);
-    
-    // Update notification badge
-    updateNotificationBadge();
-    
-    // Optionally, refresh notification list
-    fetchNotifications();
-  }
-};
-```
-
-**Received WebSocket Message:**
-```json
-{
-  "type": "notification.new",
-  "data": {
-    "notification": {
-      "notification_id": "880e8400-e29b-41d4-a716-446655440003",
-      "type": "POST_LIKE",
-      "actor": {
-        "user_id": "111e4567-e89b-12d3-a456-426614174007",
-        "user_name": "Alice Brown",
-        "profile_picture_url": "https://example.com/alice.jpg"
-      },
-      "actors_count": 1,
-      "actors": ["111e4567-e89b-12d3-a456-426614174007"],
-      "target_id": "post-456",
-      "target_type": "post",
-      "conversation_id": null,
-      "message_id": null,
-      "created_at": "2024-01-15T10:40:00Z",
-      "metadata": {
-        "actors_count": 1,
-        "actors": ["111e4567-e89b-12d3-a456-426614174007"],
-        "last_actor_id": "111e4567-e89b-12d3-a456-426614174007"
-      }
-    }
-  }
-}
-```
-
-### Example 4: Aggregated Like Notification
-
-**Initial State (1 like):**
-```json
-{
-  "notification_id": "990e8400-e29b-41d4-a716-446655440004",
-  "type": "POST_LIKE",
+  "type": "notification",
+  "notification_id": "uuid-string",
+  "notification_type": "FOLLOW",
+  "message": "john_doe started following you",
+  "target_id": "user-uuid",
+  "target_type": "user",
   "actor": {
-    "user_id": "user-1",
-    "user_name": "First User"
+    "user_id": "uuid-string",
+    "user_name": "john_doe",
+    "profile_picture_url": "https://..."
   },
-  "actors_count": 1,
-  "actors": ["user-1"],
-  "target_id": "post-789",
-  "target_type": "post",
-  "created_at": "2024-01-15T10:00:00Z"
+  "metadata": {},
+  "created_at": "2024-01-15T10:30:00Z"
 }
 ```
 
-**After 4 More Likes (WebSocket update):**
+**Aggregation:** Not applicable (one follow per user)
+
+---
+
+### 2. Post Like Notification
+
+**Type:** `POST_LIKE`
+
+**Trigger:** When a user likes a post
+
+**Message Format:**
+- Single: `"{actor_name} liked your post"`
+- Aggregated (2): `"{actor_name} and 1 other liked your post"`
+- Aggregated (3+): `"{actor_name} and {count-1} others liked your post"`
+
+**Payload (Single):**
 ```json
 {
-  "type": "notification.new",
-  "data": {
-    "notification": {
-      "notification_id": "990e8400-e29b-41d4-a716-446655440004",
-      "type": "POST_LIKE",
-      "actor": {
-        "user_id": "user-5",
-        "user_name": "Fifth User"
-      },
-      "actors_count": 5,
-      "actors": ["user-1", "user-2", "user-3", "user-4", "user-5"],
-      "target_id": "post-789",
-      "target_type": "post",
-      "created_at": "2024-01-15T10:00:00Z",
-      "metadata": {
-        "actors_count": 5,
-        "actors": ["user-1", "user-2", "user-3", "user-4", "user-5"],
-        "last_actor_id": "user-5"
-      }
-    }
-  }
+  "type": "notification",
+  "notification_id": "uuid-string",
+  "notification_type": "POST_LIKE",
+  "message": "john_doe liked your post",
+  "target_id": "post-uuid",
+  "target_type": "post",
+  "actor": {
+    "user_id": "uuid-string",
+    "user_name": "john_doe",
+    "profile_picture_url": "https://..."
+  },
+  "metadata": {
+    "actors_count": 1,
+    "actors": ["user-uuid"],
+    "last_actor_id": "user-uuid",
+    "last_actor_name": "john_doe"
+  },
+  "created_at": "2024-01-15T10:30:00Z"
 }
 ```
 
-**Note:** The same `notification_id` is used, but `actors_count` and `actors` are updated. The `actor` field shows the most recent actor.
+**Payload (Aggregated):**
+```json
+{
+  "type": "notification",
+  "notification_id": "uuid-string",
+  "notification_type": "POST_LIKE",
+  "message": "jane_smith and 2 others liked your post",
+  "target_id": "post-uuid",
+  "target_type": "post",
+  "actor": {
+    "user_id": "uuid-string",
+    "user_name": "jane_smith",
+    "profile_picture_url": "https://..."
+  },
+  "metadata": {
+    "actors_count": 3,
+    "actors": ["user-uuid-1", "user-uuid-2", "user-uuid-3"],
+    "last_actor_id": "user-uuid-3",
+    "last_actor_name": "jane_smith",
+    "is_aggregated": true
+  },
+  "created_at": "2024-01-15T10:30:00Z"
+}
+```
+
+**Aggregation:** 
+- Multiple likes on the same post within 24 hours are aggregated
+- `actors_count` indicates total number of users who liked
+- `last_actor_name` is the most recent user who liked
+
+---
+
+### 3. Comment Like Notification
+
+**Type:** `COMMENT_LIKE`
+
+**Trigger:** When a user likes a comment
+
+**Message Format:**
+- Single: `"{actor_name} liked your comment"`
+- Aggregated: `"{actor_name} and {count-1} others liked your comment"`
+
+**Payload:** Similar to Post Like notification, but `target_type` is `"comment"`
+
+**Aggregation:** Same as Post Like (24-hour window)
+
+---
+
+### 4. Prayer Request Like Notification
+
+**Type:** `PRAYER_REQUEST_LIKE`
+
+**Trigger:** When a user likes a prayer request
+
+**Message Format:**
+- Single: `"{actor_name} liked your prayer request"`
+- Aggregated: `"{actor_name} and {count-1} others liked your prayer request"`
+
+**Payload:** Similar to Post Like notification, but `target_type` is `"prayer_request"`
+
+**Aggregation:** Same as Post Like (24-hour window)
+
+---
+
+### 5. Comment on Post Notification
+
+**Type:** `COMMENT_ON_POST`
+
+**Trigger:** When a user comments on a post
+
+**Message Format:**
+- Single: `"{actor_name} commented on your post"`
+- Aggregated (2): `"{actor_name} and 1 other commented on your post"`
+- Aggregated (3+): `"{actor_name} and {count-1} others commented on your post"`
+
+**Payload:**
+```json
+{
+  "type": "notification",
+  "notification_id": "uuid-string",
+  "notification_type": "COMMENT_ON_POST",
+  "message": "john_doe commented on your post",
+  "target_id": "post-uuid",
+  "target_type": "post",
+  "actor": {
+    "user_id": "uuid-string",
+    "user_name": "john_doe",
+    "profile_picture_url": "https://..."
+  },
+  "metadata": {
+    "actors_count": 1,
+    "actors": ["user-uuid"],
+    "last_actor_id": "user-uuid",
+    "last_actor_name": "john_doe"
+  },
+  "created_at": "2024-01-15T10:30:00Z"
+}
+```
+
+**Aggregation:** Same as Post Like (24-hour window)
+
+---
+
+### 6. Comment on Prayer Request Notification
+
+**Type:** `COMMENT_ON_PRAYER_REQUEST`
+
+**Trigger:** When a user comments on a prayer request
+
+**Message Format:**
+- Single: `"{actor_name} commented on your prayer request"`
+- Aggregated: `"{actor_name} and {count-1} others commented on your prayer request"`
+
+**Payload:** Similar to Comment on Post, but `target_type` is `"prayer_request"`
+
+**Aggregation:** Same as Post Like (24-hour window)
+
+---
+
+### 7. Prayer Request Created Notification
+
+**Type:** `PRAYER_REQUEST_CREATED`
+
+**Trigger:** When a user you follow creates a prayer request
+
+**Message Format:**
+- Single: `"{actor_name} created a prayer request"`
+
+**Payload:**
+```json
+{
+  "type": "notification",
+  "notification_id": "uuid-string",
+  "notification_type": "PRAYER_REQUEST_CREATED",
+  "message": "john_doe created a prayer request",
+  "target_id": "prayer-request-uuid",
+  "target_type": "prayer_request",
+  "actor": {
+    "user_id": "uuid-string",
+    "user_name": "john_doe",
+    "profile_picture_url": "https://..."
+  },
+  "metadata": {},
+  "created_at": "2024-01-15T10:30:00Z"
+}
+```
+
+**Aggregation:** Not applicable (one notification per prayer request per follower)
+
+**Note:** Only sent to users who follow the creator
+
+---
+
+## Client Actions
+
+### Ping (Heartbeat)
+
+Send a ping message to keep the connection alive and verify connectivity.
+
+**Request:**
+```json
+{
+  "action": "ping",
+  "request_id": "optional-unique-id"
+}
+```
+
+**Response:**
+```json
+{
+  "type": "pong",
+  "request_id": "optional-unique-id"
+}
+```
+
+**Usage:**
+- Recommended to send ping every 30-60 seconds
+- Helps detect connection issues
+- Server responds with pong immediately
+
+---
+
+## Error Handling
+
+### Connection Errors
+
+**Authentication Failed:**
+- Connection is closed with code `4008`
+- No error message sent (connection rejected)
+
+**Invalid Token:**
+- Connection is closed with code `4008`
+- User should refresh their access token
+
+### Message Errors
+
+**Invalid JSON:**
+```json
+{
+  "type": "error",
+  "error": "Invalid JSON format",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+**Unknown Action:**
+```json
+{
+  "type": "error",
+  "error": "Unknown action: invalid_action",
+  "error_code": "INVALID_ACTION",
+  "request_id": "optional-request-id"
+}
+```
+
+---
+
+## Aggregation Logic
+
+### How Aggregation Works
+
+1. **Time Window:** Notifications of the same type for the same target are aggregated within a 24-hour window
+2. **Grouping:** Aggregated by:
+   - `notification_type` (e.g., POST_LIKE)
+   - `target_id` (e.g., post UUID)
+   - `recipient` (user receiving notification)
+3. **Update:** When a new event occurs within the window:
+   - Existing notification is updated (not replaced)
+   - `actors_count` is incremented
+   - `last_actor_id` and `last_actor_name` are updated
+   - New actor is added to `actors` array if not already present
+4. **New Notification:** If no notification exists or the last one is older than 24 hours, a new notification is created
+
+### Aggregation Examples
+
+**Scenario:** 3 users like the same post within 2 hours
+
+1. **First Like (User A):**
+   ```json
+   {
+     "message": "alice liked your post",
+     "metadata": {
+       "actors_count": 1,
+       "last_actor_name": "alice"
+     }
+   }
+   ```
+
+2. **Second Like (User B) - Aggregated:**
+   ```json
+   {
+     "message": "bob and 1 other liked your post",
+     "metadata": {
+       "actors_count": 2,
+       "last_actor_name": "bob",
+       "is_aggregated": true
+     }
+   }
+   ```
+
+3. **Third Like (User C) - Aggregated:**
+   ```json
+   {
+     "message": "charlie and 2 others liked your post",
+     "metadata": {
+       "actors_count": 3,
+       "last_actor_name": "charlie",
+       "is_aggregated": true
+     }
+   }
+   ```
+
+---
+
+## Self-Notification Prevention
+
+Users **do not** receive notifications for their own actions:
+
+- ❌ Liking your own post
+- ❌ Commenting on your own post
+- ❌ Liking your own comment
+- ❌ Liking your own prayer request
+- ❌ Commenting on your own prayer request
+
+**Note:** Following yourself is also prevented at the model level.
+
+---
+
+## Notification Flow Diagram
+
+```
+User Action (Follow/Like/Comment)
+         ↓
+Django Signal Triggered
+         ↓
+Signal Handler Executes
+         ↓
+Check: Self-action? → No
+         ↓
+Check: Existing notification? → Yes/No
+         ↓
+Create or Update Notification
+         ↓
+Format Notification (with aggregation)
+         ↓
+Send via Channel Layer
+         ↓
+Broadcast to user_{user_id}_notifications group
+         ↓
+WebSocket Consumer Receives
+         ↓
+Send to Connected Client
+         ↓
+Client Displays Notification
+```
+
+---
+
+## Field Descriptions
+
+### Notification Object Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | Always `"notification"` for notification messages |
+| `notification_id` | UUID | Unique identifier for the notification |
+| `notification_type` | string | Type of notification (FOLLOW, POST_LIKE, etc.) |
+| `message` | string | Human-readable notification message |
+| `target_id` | UUID string | ID of the target object (post, comment, etc.) |
+| `target_type` | string | Type of target (`post`, `comment`, `prayer_request`, `user`) |
+| `actor` | object | User who triggered the notification |
+| `actor.user_id` | UUID string | Actor's user ID |
+| `actor.user_name` | string | Actor's username |
+| `actor.profile_picture_url` | string | Actor's profile picture URL (empty string if not set) |
+| `metadata` | object | Additional notification data |
+| `metadata.actors_count` | integer | Number of users who performed the action |
+| `metadata.actors` | array | List of user IDs who performed the action |
+| `metadata.last_actor_id` | UUID string | Most recent actor's user ID |
+| `metadata.last_actor_name` | string | Most recent actor's username |
+| `metadata.is_aggregated` | boolean | Whether this is an aggregated notification |
+| `created_at` | ISO 8601 string | When the notification was created |
 
 ---
 
@@ -713,43 +659,78 @@ ws.onmessage = function(event) {
 
 ### Client Implementation
 
-1. **Initial Load:**
-   - Call `GET /api/notifications/` on app startup to get all existing notifications
-   - Display notifications in UI
+1. **Reconnection Logic:**
+   - Implement exponential backoff for reconnection
+   - Reconnect automatically on connection loss
+   - Refresh JWT token if connection fails with 4008
 
-2. **Real-time Updates:**
-   - Connect to WebSocket to receive new notifications in real-time
-   - Update UI when `notification.new` message is received
-   - Optionally refresh notification list periodically
+2. **Heartbeat:**
+   - Send ping every 30-60 seconds
+   - Detect connection issues if pong not received
 
-3. **Periodic Refresh:**
-   - Call `GET /api/notifications/` periodically (e.g., every 5 minutes) to catch any missed notifications
-   - Subsequent calls will only return new notifications
+3. **Notification Display:**
+   - Show notifications in real-time as they arrive
+   - Group notifications by type if needed
+   - Display aggregated count clearly
 
 4. **Error Handling:**
-   - Handle WebSocket disconnections gracefully
-   - Implement retry logic for failed API calls
-   - Show user-friendly error messages
+   - Handle all error types gracefully
+   - Log errors for debugging
+   - Provide user feedback on connection issues
 
-### Server-Side Notes
+5. **Token Management:**
+   - Refresh access token before expiration
+   - Reconnect with new token when refreshed
+   - Handle token expiration gracefully
 
-- Notifications are created automatically via Django signals
-- No manual notification creation is required
-- Self-actions (liking your own post, following yourself) are automatically skipped
-- Aggregation happens automatically for like notifications
-- Fetch tracking is handled automatically
+### Performance Considerations
 
----
+1. **Connection Management:**
+   - Maintain single WebSocket connection per user
+   - Avoid multiple simultaneous connections
+   - Close connection when app goes to background (mobile)
 
-## Summary
-
-- **Single REST Endpoint:** `GET /api/notifications/` - Returns all notifications on first call, only new ones on subsequent calls
-- **WebSocket Integration:** Real-time notifications via existing chat WebSocket connection
-- **Automatic Creation:** Notifications created via Django signals (no HTTP endpoint for creation)
-- **Fetch Tracking:** Automatic server-side tracking of last fetch time
-- **Aggregation:** Like notifications are automatically aggregated
-- **No Read Status:** No mark-as-read functionality (simplified system)
+2. **Notification Handling:**
+   - Process notifications asynchronously
+   - Don't block UI thread with notification processing
+   - Implement notification queue if needed
 
 ---
 
-**Last Updated:** 2024-01-15
+## Testing
+
+### Manual Testing
+
+1. **Connect to Unified WebSocket:**
+   ```bash
+   wscat -c "ws://localhost:8000/ws/user/?token=YOUR_TOKEN"
+   ```
+   
+2. **Fetch Missed Notifications:**
+   ```bash
+   curl -X GET "http://localhost:8000/api/notifications/missed/?limit=50" \
+     -H "Authorization: Bearer YOUR_TOKEN"
+   ```
+   
+3. **Mark All as Read:**
+   ```bash
+   curl -X POST "http://localhost:8000/api/notifications/markread/" \
+     -H "Authorization: Bearer YOUR_TOKEN"
+   ```
+
+4. **Trigger Notifications:**
+   - Follow a user (via REST API)
+   - Like a post (via REST API)
+   - Comment on a post (via REST API)
+   - Create a prayer request (via REST API)
+
+5. **Verify:**
+   - Notifications appear in unified WebSocket connection
+   - Aggregation works correctly
+   - Self-notifications are prevented
+   - Missed notifications endpoint returns only unread notifications
+   - Mark as read endpoint marks all notifications correctly
+
+### Automated Testing
+
+For automated testing, use the REST API endpoints and WebSocket connections programmatically. All notification types can be tested by triggering the corresponding actions (follow, like, comment, create prayer request) via the REST API while monitoring WebSocket messages.

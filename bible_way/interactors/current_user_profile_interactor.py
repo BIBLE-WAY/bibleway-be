@@ -14,14 +14,21 @@ class CurrentUserProfileInteractor:
         if not user:
             return self.response.user_not_found_response()
         
+        # Get following and followers counts
+        following_result = self.storage.get_user_following(user_id=user_id)
+        followers_result = self.storage.get_user_followers(user_id=user_id)
+        
         response_dto = UserProfileResponseDTO(
             user_id=str(user.user_id),
-            user_name=user.user_name,
+            user_name=user.username,  # Map username to user_name for API response
             email=user.email,
             country=user.country,
             age=user.age,
             preferred_language=user.preferred_language,
-            profile_picture_url=user.profile_picture_url
+            profile_picture_url=user.profile_picture_url,
+            is_admin=user.is_staff,
+            following_count=following_result['total_count'],
+            followers_count=followers_result['total_count']
         )
 
         return self.response.user_profile_success_response(response_dto=response_dto)

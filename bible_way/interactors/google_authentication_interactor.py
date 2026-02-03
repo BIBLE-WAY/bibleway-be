@@ -25,7 +25,6 @@ class GoogleAuthenticationInteractor:
             google_id = decoded_token['uid']
             email = decoded_token['email']
             name = decoded_token.get('name', '')
-            profile_picture_url = decoded_token.get('picture', None)
             
         except Exception as e:
             print(f"Token verification failed: {e}")
@@ -45,13 +44,10 @@ class GoogleAuthenticationInteractor:
             if existing_user.auth_provider == 'EMAIL':
                 existing_user = self.storage.update_user_auth_provider(existing_user, 'BOTH')
                 existing_user.google_id = google_id
-                if profile_picture_url:
-                    existing_user.profile_picture_url = profile_picture_url
+                existing_user.is_email_verified = True  # Google already verified the email
                 existing_user.save()
             elif existing_user.auth_provider == 'GOOGLE':
                 existing_user.google_id = google_id
-                if profile_picture_url:
-                    existing_user.profile_picture_url = profile_picture_url
                 existing_user.save()
             
             tokens = self.authentication.create_tokens(user=existing_user)
@@ -67,22 +63,21 @@ class GoogleAuthenticationInteractor:
         if not name:
             name = email.split('@')[0]
 
+        # Generate username from name (max 150 chars for Django's AbstractUser)
         username = name.replace(' ', '_').lower()[:150]
-        user_name = name.replace(' ', '_').lower()[:255]
         
-        while self.storage.get_user_by_user_name(user_name):
+        # Ensure username is unique
+        while self.storage.get_user_by_username(username):
             random_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
-            user_name = f"{user_name}_{random_suffix}"[:255]
+            username = f"{username}_{random_suffix}"[:150]
         
         user = self.storage.create_google_user(
             username=username,
-            user_name=user_name,
             email=email,
             google_id=google_id,
             country=country or "",
             age=age,
-            preferred_language=preferred_language,
-            profile_picture_url=profile_picture_url
+            preferred_language=preferred_language
         )
         
         tokens = self.authentication.create_tokens(user=user)

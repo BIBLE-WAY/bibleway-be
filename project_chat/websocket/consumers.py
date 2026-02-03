@@ -10,25 +10,24 @@ from channels.db import database_sync_to_async
 from django.contrib.auth import get_user_model
 from typing import Dict, Any, Set
 from datetime import datetime
+from django.utils import timezone
 
 from project_chat.storage import ChatDB
-from project_chat.storage.redis_state import (
-    mark_user_online,
-    mark_user_offline,
-    get_last_seen,
-    get_all_online_users,
-    is_user_online,
-)
 from project_chat.presenters.message_response import MessageResponse
 from project_chat.presenters.chat_error_response import ChatErrorResponse
 from project_chat.interactors.send_message_interactor import SendMessageInteractor
 from project_chat.interactors.edit_message_interactor import EditMessageInteractor
 from project_chat.interactors.delete_message_interactor import DeleteMessageInteractor
 from project_chat.interactors.mark_read_interactor import MarkReadInteractor
+from project_chat.interactors.get_inbox_interactor import GetInboxInteractor
+from project_chat.presenters.inbox_response import InboxResponse
 from project_chat.websocket.utils import check_rate_limit, ErrorCodes
 from project_chat.websocket.middleware import JWTAuthMiddleware
 
 User = get_user_model()
+
+# In-memory presence tracking (shared across all consumer instances)
+_online_users: Dict[str, datetime] = {}
 
 
 def _normalize_user_id(user_id) -> str:
@@ -72,6 +71,10 @@ class UserChatConsumer(AsyncWebsocketConsumer):
         self.mark_read_interactor = MarkReadInteractor(
             self.storage, self.message_response, self.error_response
         )
+        self.get_inbox_interactor = GetInboxInteractor(
+            storage=self.storage,
+            response=InboxResponse()
+        )
     
     async def connect(self):
         """Handle WebSocket connection."""
@@ -88,31 +91,32 @@ class UserChatConsumer(AsyncWebsocketConsumer):
         
         self.user_id = _normalize_user_id(self.user.user_id)  # Normalize to consistent format
         
-        # Join user's personal group for chat notifications
+        # Join user's personal group for chat
         user_group = f"user_{self.user_id}"
         await self.channel_layer.group_add(user_group, self.channel_name)
         self.user_groups.add(user_group)
         
-        # Join notification group for notification broadcasts
-        notification_group = f"notification_{self.user_id}"
+        # Join user's notification group
+        notification_group = f"user_{self.user_id}_notifications"
         await self.channel_layer.group_add(notification_group, self.channel_name)
         self.user_groups.add(notification_group)
+        
+        # Join user's inbox subscription group for real-time inbox updates
+        inbox_group = f"inbox_{self.user_id}"
+        await self.channel_layer.group_add(inbox_group, self.channel_name)
+        self.user_groups.add(inbox_group)
         
         # Accept connection
         await self.accept()
         
-        # Update presence status (user is now online, persisted in Redis)
-        mark_user_online(self.user_id)
+        # Update presence status (user is now online)
+        _online_users[self.user_id] = timezone.now()
         
         # Debug: Log when user comes online
         import logging
         logger = logging.getLogger(__name__)
-        online_users = get_all_online_users()
-        logger.info(
-            f"User {self.user_id} connected and marked as online. "
-            f"Total online users: {len(online_users)}"
-        )
-        logger.debug(f"All online users: {list(online_users.keys())}")
+        logger.info(f"User {self.user_id} connected and marked as online. Total online users: {len(_online_users)}")
+        logger.debug(f"All online users: {list(_online_users.keys())}")
         
         # Broadcast online status to all conversations where user is a member
         await self._broadcast_presence_to_conversations(is_online=True)
@@ -129,15 +133,12 @@ class UserChatConsumer(AsyncWebsocketConsumer):
             await self._broadcast_presence_to_conversations(is_online=False)
             
             # Update presence status (user is now offline)
-            mark_user_offline(self.user_id)
-            # Debug: Log when user goes offline
-            import logging
-            logger = logging.getLogger(__name__)
-            online_users = get_all_online_users()
-            logger.info(
-                f"User {self.user_id} disconnected and marked as offline. "
-                f"Total online users: {len(online_users)}"
-            )
+            if self.user_id in _online_users:
+                del _online_users[self.user_id]
+                # Debug: Log when user goes offline
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.info(f"User {self.user_id} disconnected and marked as offline. Total online users: {len(_online_users)}")
         
         # Leave all groups
         for group in self.user_groups:
@@ -184,6 +185,8 @@ class UserChatConsumer(AsyncWebsocketConsumer):
                 pass
             elif action == 'get_presence':
                 await self.handle_get_presence(data, request_id)
+            elif action == 'get_inbox':
+                await self.handle_get_inbox(data, request_id)
             else:
                 await self.send(text_data=json.dumps(
                     self.error_response.invalid_action(request_id)
@@ -255,12 +258,15 @@ class UserChatConsumer(AsyncWebsocketConsumer):
                         self.storage.get_message_by_id
                     )(message_id)
                     if message:
+                        # Get conversation_id from message (handles new conversations)
+                        actual_conversation_id = str(message.conversation_id)
+                        
                         broadcast_data = await database_sync_to_async(
                             self.send_message_interactor.get_message_for_broadcast
                         )(message)
                         
                         # Ensure we're in the conversation group
-                        conv_group = f"conversation_{conversation_id}"
+                        conv_group = f"conversation_{actual_conversation_id}"
                         if conv_group not in self.user_groups:
                             await self.channel_layer.group_add(conv_group, self.channel_name)
                             self.user_groups.add(conv_group)
@@ -273,6 +279,9 @@ class UserChatConsumer(AsyncWebsocketConsumer):
                                 'data': broadcast_data
                             }
                         )
+                        
+                        # Push inbox updates to all conversation members
+                        await self._push_inbox_updates(actual_conversation_id)
         except Exception as e:
             import traceback
             print(f"Error in handle_send_message: {e}")
@@ -323,6 +332,9 @@ class UserChatConsumer(AsyncWebsocketConsumer):
                         'data': broadcast_data
                     }
                 )
+                
+                # Push inbox updates to all conversation members
+                await self._push_inbox_updates(str(message.conversation_id))
     
     async def handle_delete_message(self, data: Dict[str, Any], request_id: str):
         """Handle delete_message action."""
@@ -373,6 +385,9 @@ class UserChatConsumer(AsyncWebsocketConsumer):
                     'data': broadcast_data
                 }
             )
+            
+            # Push inbox updates to all conversation members
+            await self._push_inbox_updates(conversation_id)
     
     async def handle_mark_read(self, data: Dict[str, Any], request_id: str):
         """Handle mark_read action."""
@@ -400,8 +415,7 @@ class UserChatConsumer(AsyncWebsocketConsumer):
         
         # If successful, broadcast to conversation group
         if response.get('ok'):
-            from datetime import datetime
-            last_read_at = datetime.now().isoformat()
+            last_read_at = timezone.now().isoformat()
             broadcast_data = await database_sync_to_async(
                 self.mark_read_interactor.get_read_receipt_broadcast
             )(self.user_id, conversation_id, last_read_at)
@@ -414,6 +428,9 @@ class UserChatConsumer(AsyncWebsocketConsumer):
                     'data': broadcast_data
                 }
             )
+            
+            # Push inbox updates to all conversation members (unread count changed)
+            await self._push_inbox_updates(conversation_id)
     
     async def handle_join_conversation(self, data: Dict[str, Any], request_id: str):
         """Handle join_conversation action."""
@@ -489,7 +506,7 @@ class UserChatConsumer(AsyncWebsocketConsumer):
         # Broadcast typing indicator
         typing_data = self.message_response.typing_indicator(
             self.user_id,
-            self.user.user_name,
+            self.user.username,
             conversation_id,
             is_typing
         )
@@ -516,16 +533,6 @@ class UserChatConsumer(AsyncWebsocketConsumer):
         """Handle message_deleted event from group."""
         await self.send(text_data=json.dumps(event['data']))
     
-    async def notification_new(self, event):
-        """Handle new notification broadcast from group."""
-        # Forward notification to WebSocket
-        notification_data = event.get('data', {})
-        response = {
-            "type": "notification.new",
-            "data": notification_data
-        }
-        await self.send(text_data=json.dumps(response))
-    
     async def read_receipt_updated(self, event):
         """Handle read_receipt_updated event from group."""
         await self.send(text_data=json.dumps(event['data']))
@@ -536,6 +543,16 @@ class UserChatConsumer(AsyncWebsocketConsumer):
     
     async def presence_updated(self, event):
         """Handle presence_updated event from group."""
+        await self.send(text_data=json.dumps(event['data']))
+    
+    async def notification_sent(self, event):
+        """Handle notification_sent event from notification group."""
+        # Send notification to WebSocket client
+        await self.send(text_data=json.dumps(event['data']))
+    
+    async def inbox_updated(self, event):
+        """Handle inbox update broadcast from inbox subscription group."""
+        # Send inbox update to WebSocket client
         await self.send(text_data=json.dumps(event['data']))
     
     async def _broadcast_presence_to_conversations(self, is_online: bool):
@@ -551,9 +568,8 @@ class UserChatConsumer(AsyncWebsocketConsumer):
             
             # Get last_seen timestamp if going offline
             last_seen = None
-            if not is_online:
-                last_seen_dt = get_last_seen(self.user_id)
-                last_seen = last_seen_dt.isoformat() if last_seen_dt else None
+            if not is_online and self.user_id in _online_users:
+                last_seen = _online_users[self.user_id].isoformat()
             
             # Get all conversations where user is a member
             conversations = await database_sync_to_async(
@@ -602,6 +618,66 @@ class UserChatConsumer(AsyncWebsocketConsumer):
             logger.error(f"Error broadcasting presence status: {e}")
             logger.debug(traceback.format_exc())
     
+    async def _push_inbox_updates(self, conversation_id: str):
+        """
+        Push inbox updates to all conversation members.
+        
+        Computes user-specific inbox entries for each member and pushes them
+        through their individual inbox subscription groups.
+        
+        Args:
+            conversation_id: ID of the conversation
+        """
+        try:
+            # Get all conversation members
+            members = await database_sync_to_async(
+                self.storage.get_conversation_members
+            )(conversation_id)
+            
+            if not members:
+                return
+            
+            # Compute and push inbox updates for each member
+            for member in members:
+                member_id = str(member.user.user_id)
+                
+                # Compute inbox entry for this member
+                inbox_entry = await database_sync_to_async(
+                    self.storage.get_conversation_inbox_entry
+                )(member_id, conversation_id)
+                
+                if inbox_entry:
+                    # Format as inbox update
+                    update_data = InboxResponse.inbox_update_broadcast(inbox_entry)
+                    
+                    # Push to member's inbox subscription
+                    # Normalize user_id for group name consistency
+                    normalized_member_id = _normalize_user_id(member_id)
+                    inbox_group = f"inbox_{normalized_member_id}"
+                    
+                    await self.channel_layer.group_send(
+                        inbox_group,
+                        {
+                            'type': 'inbox_updated',
+                            'data': update_data
+                        }
+                    )
+                    
+                    # Debug logging
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.debug(
+                        f"Pushed inbox update for conversation {conversation_id} "
+                        f"to user {member_id} (normalized: {normalized_member_id})"
+                    )
+        except Exception as e:
+            # Log error but don't break message sending flow
+            import logging
+            import traceback
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error pushing inbox updates for conversation {conversation_id}: {e}")
+            logger.debug(traceback.format_exc())
+    
     async def handle_get_presence(self, data: Dict[str, Any], request_id: str):
         """Handle get_presence action."""
         conversation_id = data.get('conversation_id')
@@ -634,8 +710,7 @@ class UserChatConsumer(AsyncWebsocketConsumer):
         # Debug: Log all online users for troubleshooting
         import logging
         logger = logging.getLogger(__name__)
-        online_users = get_all_online_users()
-        logger.info(f"Online users in Redis: {list(online_users.keys())}")
+        logger.info(f"Online users in _online_users: {list(_online_users.keys())}")
         logger.info(f"Checking presence for conversation {conversation_id}")
         logger.info(f"Current user_id (normalized): {current_user_id_normalized}")
         
@@ -650,31 +725,41 @@ class UserChatConsumer(AsyncWebsocketConsumer):
             
             # Check if user is online (always true for the requesting user since they're connected)
             if current_user_id_normalized and member_id == current_user_id_normalized:
-                is_online_flag = True
-                last_seen_dt = datetime.now()
+                is_online = True
+                last_seen = timezone.now()
                 logger.info(f"User {original_user_id} is the requesting user - marking as online")
             else:
-                # Check if member is in Redis-backed online users
-                is_online_flag = is_user_online(member_id)
-                if is_online_flag:
-                    last_seen_dt = get_last_seen(member_id) or datetime.now()
-                    logger.info(
-                        f"User {original_user_id} (normalized: {member_id}) "
-                        f"found in Redis online users - ONLINE"
-                    )
+                # Check if member is in _online_users dictionary
+                is_online = member_id in _online_users
+                if is_online:
+                    last_seen = _online_users[member_id]
+                    logger.info(f"User {original_user_id} (normalized: {member_id}) found in _online_users - ONLINE")
                 else:
-                    last_seen_dt = None
-                    logger.warning(
-                        f"User {original_user_id} (normalized: '{member_id}') "
-                        f"NOT found in Redis online users - OFFLINE"
-                    )
-                    logger.warning(f"Available keys in Redis online users: {list(online_users.keys())}")
+                    # Fallback: Try case-insensitive lookup (shouldn't be needed if normalization is consistent)
+                    matching_key = None
+                    for key in _online_users.keys():
+                        if _normalize_user_id(key) == member_id:
+                            matching_key = key
+                            break
+                    
+                    if matching_key:
+                        is_online = True
+                        last_seen = _online_users[matching_key]
+                        logger.warning(f"User {original_user_id} found with case-insensitive match (key: {matching_key}) - FIXING normalization issue!")
+                    else:
+                        is_online = False
+                        last_seen = None
+                        logger.warning(f"User {original_user_id} (normalized: '{member_id}') NOT found in _online_users - OFFLINE")
+                        logger.warning(f"Available keys in _online_users: {list(_online_users.keys())}")
+                        # Log the types to help debug
+                        logger.warning(f"member_id type: {type(member_id)}, value: '{member_id}'")
+                        logger.warning(f"Sample key type: {type(list(_online_users.keys())[0]) if _online_users else 'N/A'}, value: '{list(_online_users.keys())[0] if _online_users else 'N/A'}'")
             
             presence_data.append({
                 "user_id": original_user_id,  # Return original format
-                "user_name": member.user.user_name,
-                "is_online": is_online_flag,
-                "last_seen": last_seen_dt.isoformat() if last_seen_dt else None
+                "user_name": member.user.username,
+                "is_online": is_online,
+                "last_seen": last_seen.isoformat() if last_seen else None
             })
         
         # Send presence status
@@ -687,6 +772,57 @@ class UserChatConsumer(AsyncWebsocketConsumer):
             }
         }
         await self.send(text_data=json.dumps(response))
+    
+    async def handle_get_inbox(self, data: Dict[str, Any], request_id: str):
+        """Handle get_inbox WebSocket action."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            # Use original user.user_id (UUID format) instead of normalized self.user_id
+            # get_user_conversations expects UUID string format
+            user_id_for_query = str(self.user.user_id) if self.user else self.user_id
+            
+            logger.debug(f"handle_get_inbox called for user_id: {user_id_for_query}, request_id: {request_id}")
+            
+            # Get inbox using existing interactor
+            response = await database_sync_to_async(
+                self.get_inbox_interactor.get_inbox_interactor
+            )(user_id_for_query)
+            
+            logger.debug(f"get_inbox_interactor returned: success={response.get('success')}, keys={list(response.keys())}")
+            
+            # Add request_id for WebSocket response
+            response['request_id'] = request_id
+            
+            # Set appropriate type based on success/failure
+            if response.get('success', False):
+                response['type'] = 'inbox.list'
+                logger.debug(f"Sending inbox.list response with {len(response.get('data', []))} conversations")
+            else:
+                # Error response from interactor
+                response['type'] = 'error'
+                logger.warning(f"Inbox retrieval failed: {response.get('error')}")
+            
+            # Send response via WebSocket
+            try:
+                response_json = json.dumps(response, default=str)  # Use default=str to handle any datetime objects
+                logger.debug(f"Sending WebSocket response: {response_json[:200]}...")
+                await self.send(text_data=response_json)
+                logger.info(f"Successfully sent inbox.list response for user {user_id_for_query}")
+            except (TypeError, ValueError) as json_error:
+                logger.error(f"JSON serialization error in handle_get_inbox: {json_error}")
+                logger.error(f"Response keys: {list(response.keys())}")
+                logger.error(f"Response data type: {type(response.get('data'))}")
+                # Try to send error response
+                error_response = self.error_response.server_error(request_id)
+                await self.send(text_data=json.dumps(error_response))
+        except Exception as e:
+            import traceback
+            logger.error(f"Error in handle_get_inbox for user {self.user_id}: {e}", exc_info=True)
+            logger.debug(traceback.format_exc())
+            error_response = self.error_response.server_error(request_id)
+            await self.send(text_data=json.dumps(error_response))
 
 
 class ChatConsumer(AsyncWebsocketConsumer):

@@ -5,12 +5,12 @@ from rest_framework import status
 class CreateBookResponse:
 
     @staticmethod
-    def book_created_successfully_response(book_data: dict) -> Response:
+    def book_created_successfully_response(book_id: str) -> Response:
         return Response(
             {
                 "success": True,
-                "message": "Book created and parsed successfully",
-                "data": book_data
+                "message": "Book created successfully",
+                "book_id": book_id
             },
             status=status.HTTP_201_CREATED
         )
@@ -27,17 +27,6 @@ class CreateBookResponse:
         )
 
     @staticmethod
-    def parsing_error_response(error_message: str) -> Response:
-        return Response(
-            {
-                "success": False,
-                "error": error_message,
-                "error_code": "PARSING_ERROR"
-            },
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    @staticmethod
     def error_response(error_message: str) -> Response:
         return Response(
             {
@@ -47,4 +36,3 @@ class CreateBookResponse:
             },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
-

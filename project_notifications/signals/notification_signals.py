@@ -1,172 +1,356 @@
-"""
-Signal handlers for creating notifications automatically.
-
-Notifications are created when:
-- User follows another user
-- User likes a post/comment/prayer request/verse
-- User sends a message
-"""
+import logging
 from django.db.models.signals import post_save
 from django.dispatch import receiver
-from bible_way.models import UserFollowers, Reaction
-from project_chat.models import Message
+from bible_way.models import UserFollowers, Reaction, Comment, PrayerRequest
 from project_notifications.storage import NotificationDB
-from project_notifications.utils.broadcast import broadcast_notification
+from project_notifications.models import NotificationTypeChoices
+from project_notifications.utils import send_notification_via_websocket
+
+logger = logging.getLogger(__name__)
+storage = NotificationDB()
 
 
 @receiver(post_save, sender=UserFollowers)
-def create_follow_notification(sender, instance, created, **kwargs):
-    """Create notification when user follows another user."""
-    if not created:  # Only on new follow
-        return
-    
-    # Skip if user follows themselves
-    follower_id = str(instance.follower_id.user_id)
-    followed_id = str(instance.followed_id.user_id)
-    
-    if follower_id == followed_id:
+def handle_follow_signal(sender, instance, created, **kwargs):
+    """Handle follow notification."""
+    if not created:
         return
     
     try:
-        notification = NotificationDB().create_notification(
-            recipient_id=followed_id,
-            notification_type='FOLLOW',
-            actor_id=follower_id,
+        follower_id = str(instance.follower_id.user_id)
+        followed_id = str(instance.followed_id.user_id)
+        follower_name = instance.follower_id.username
+        followed_name = instance.followed_id.username
+        
+        # Don't notify self
+        if follower_id == followed_id:
+            logger.debug(f"Self-follow prevented: {follower_id}")
+            return
+        
+        action_msg = f"🔔 NOTIFICATION ACTION: {follower_name} ({follower_id[:8]}...) followed {followed_name} ({followed_id[:8]}...)"
+        print(action_msg)
+        logger.info(action_msg)
+        
+        # Create notification (follows are not aggregated)
+        notification = storage.create_notification(
+            notification_type=NotificationTypeChoices.FOLLOW,
             target_id=followed_id,
-            target_type='user'
+            target_type='user',
+            actor_id=follower_id,
+            recipient_id=followed_id
         )
-        if notification:
-            broadcast_notification(notification)
+        
+        # Send via WebSocket
+        send_notification_via_websocket(notification)
+        success_msg = (
+            f"✓ FOLLOW notification sent via WebSocket: notification_id={notification.notification_id}, "
+            f"follower={follower_name} ({follower_id[:8]}...), followed={followed_name} ({followed_id[:8]}...)"
+        )
+        print(success_msg)
+        logger.info(success_msg)
     except Exception as e:
-        # Log error but don't break the follow operation
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.error(f"Error creating follow notification: {e}")
+        logger.error(
+            f"Failed to send follow notification: follower={getattr(instance.follower_id, 'user_id', 'unknown')}, "
+            f"followed={getattr(instance.followed_id, 'user_id', 'unknown')}, error={str(e)}",
+            exc_info=True
+        )
+        # Don't raise - let the follow action succeed even if notification fails
 
 
 @receiver(post_save, sender=Reaction)
-def create_like_notification(sender, instance, created, **kwargs):
-    """Create or update notification when user likes content."""
-    if not created:  # Only on new reaction
-        return
-    
-    actor_id = str(instance.user.user_id)
-    notification_type = None
-    recipient_id = None
-    target_id = None
-    target_type = None
-    
-    # Determine notification type and recipient based on what was liked
-    if instance.post:
-        # Someone liked a post
-        recipient_id = str(instance.post.user.user_id)
-        target_id = str(instance.post.post_id)
-        target_type = 'post'
-        notification_type = 'POST_LIKE'
-    elif instance.comment:
-        # Someone liked a comment
-        recipient_id = str(instance.comment.user.user_id)
-        target_id = str(instance.comment.comment_id)
-        target_type = 'comment'
-        notification_type = 'COMMENT_LIKE'
-    elif instance.prayer_request:
-        # Someone liked a prayer request
-        recipient_id = str(instance.prayer_request.user.user_id)
-        target_id = str(instance.prayer_request.prayer_request_id)
-        target_type = 'prayer_request'
-        notification_type = 'PRAYER_REQUEST_LIKE'
-    elif instance.verse:
-        # Someone liked a verse (verse doesn't have an owner, skip)
-        # Verse likes don't create notifications as verses are not user-owned
-        return
-    
-    # Skip if user likes their own content
-    if recipient_id and actor_id == recipient_id:
-        return
-    
-    if not notification_type or not recipient_id:
+def handle_reaction_signal(sender, instance, created, **kwargs):
+    """Handle like notifications for posts, comments, and prayer requests."""
+    if not created:
         return
     
     try:
-        # Check if notification exists for aggregation
-        notification = NotificationDB().get_or_create_aggregated_notification(
-            recipient_id=recipient_id,
-            notification_type=notification_type,
-            target_id=target_id,
-            target_type=target_type
-        )
+        actor_id = str(instance.user.user_id)
         
-        if notification:
-            # Update existing notification with new actor
-            updated_notification = NotificationDB().update_aggregated_notification(
-                notification=notification,
-                actor_id=actor_id
+        # Handle post like
+        if instance.post:
+            post = instance.post
+            recipient_id = str(post.user.user_id)
+            actor_name = instance.user.username
+            recipient_name = post.user.username
+            
+            # Don't notify self
+            if actor_id == recipient_id:
+                logger.debug(f"Self-like prevented: {actor_id} liked own post")
+                return
+            
+            action_msg = (
+                f"🔔 NOTIFICATION ACTION: {actor_name} ({actor_id[:8]}...) liked post {str(post.post_id)[:8]}... "
+                f"(owned by {recipient_name})"
             )
-            if updated_notification:
-                broadcast_notification(updated_notification)
-        else:
-            # Create new notification
-            new_notification = NotificationDB().create_notification(
-                recipient_id=recipient_id,
-                notification_type=notification_type,
+            print(action_msg)
+            logger.info(action_msg)
+            
+            # Get or create aggregated notification
+            notification, created = storage.get_or_create_aggregated_notification(
+                notification_type=NotificationTypeChoices.POST_LIKE,
+                target_id=str(post.post_id),
+                target_type='post',
                 actor_id=actor_id,
-                target_id=target_id,
-                target_type=target_type
+                recipient_id=recipient_id
             )
-            if new_notification:
-                broadcast_notification(new_notification)
+            
+            # Initialize or update metadata (works for both new and existing)
+            storage.update_notification_metadata(
+                notification,
+                actor_id,
+                instance.user.username
+            )
+            
+            # Send via WebSocket
+            send_notification_via_websocket(notification)
+            metadata = notification.metadata or {}
+            actors_count = metadata.get('actors_count', 1)
+            if actors_count > 1:
+                success_msg = (
+                    f"✓ POST_LIKE notification sent (AGGREGATED, {actors_count} actors): "
+                    f"notification_id={notification.notification_id}, post={str(post.post_id)[:8]}..., "
+                    f"recipient={recipient_name} ({recipient_id[:8]}...)"
+                )
+            else:
+                success_msg = (
+                    f"✓ POST_LIKE notification sent: notification_id={notification.notification_id}, "
+                    f"actor={actor_name} ({actor_id[:8]}...), post={str(post.post_id)[:8]}..., "
+                    f"recipient={recipient_name} ({recipient_id[:8]}...)"
+                )
+            print(success_msg)
+            logger.info(success_msg)
+        
+        # Handle comment like
+        elif instance.comment:
+            comment = instance.comment
+            recipient_id = str(comment.user.user_id)
+            actor_name = instance.user.username
+            recipient_name = comment.user.username
+            
+            # Don't notify self
+            if actor_id == recipient_id:
+                logger.debug(f"Self-like prevented: {actor_id} liked own comment")
+                return
+            
+            action_msg = (
+                f"🔔 NOTIFICATION ACTION: {actor_name} ({actor_id[:8]}...) liked comment {str(comment.comment_id)[:8]}... "
+                f"(owned by {recipient_name})"
+            )
+            print(action_msg)
+            logger.info(action_msg)
+            
+            # Get or create aggregated notification
+            notification, created = storage.get_or_create_aggregated_notification(
+                notification_type=NotificationTypeChoices.COMMENT_LIKE,
+                target_id=str(comment.comment_id),
+                target_type='comment',
+                actor_id=actor_id,
+                recipient_id=recipient_id
+            )
+            
+            # Initialize or update metadata (works for both new and existing)
+            storage.update_notification_metadata(
+                notification,
+                actor_id,
+                instance.user.username
+            )
+            
+            # Send via WebSocket
+            send_notification_via_websocket(notification)
+            metadata = notification.metadata or {}
+            actors_count = metadata.get('actors_count', 1)
+            success_msg = (
+                f"✓ COMMENT_LIKE notification sent{' (AGGREGATED, ' + str(actors_count) + ' actors)' if actors_count > 1 else ''}: "
+                f"notification_id={notification.notification_id}, actor={actor_name} ({actor_id[:8]}...), "
+                f"comment={str(comment.comment_id)[:8]}..., recipient={recipient_name} ({recipient_id[:8]}...)"
+            )
+            print(success_msg)
+            logger.info(success_msg)
+        
+        # Handle prayer request like
+        elif instance.prayer_request:
+            prayer_request = instance.prayer_request
+            recipient_id = str(prayer_request.user.user_id)
+            
+            # Don't notify self
+            if actor_id == recipient_id:
+                return
+            
+            # Get or create aggregated notification
+            notification, _ = storage.get_or_create_aggregated_notification(
+                notification_type=NotificationTypeChoices.PRAYER_REQUEST_LIKE,
+                target_id=str(prayer_request.prayer_request_id),
+                target_type='prayer_request',
+                actor_id=actor_id,
+                recipient_id=recipient_id
+            )
+            
+            # Initialize or update metadata (works for both new and existing)
+            storage.update_notification_metadata(
+                notification,
+                actor_id,
+                instance.user.username
+            )
+            
+            # Send via WebSocket
+            send_notification_via_websocket(notification)
+            logger.info(
+                f"Prayer request like notification sent: actor={actor_id}, "
+                f"prayer_request={prayer_request.prayer_request_id}, recipient={recipient_id}"
+            )
     except Exception as e:
-        # Log error but don't break the like operation
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.error(f"Error creating like notification: {e}")
+        logger.error(
+            f"Failed to send reaction notification: actor={getattr(instance.user, 'user_id', 'unknown')}, "
+            f"reaction_id={getattr(instance, 'reaction_id', 'unknown')}, error={str(e)}",
+            exc_info=True
+        )
+        # Don't raise - let the reaction action succeed even if notification fails
 
 
-@receiver(post_save, sender=Message)
-def create_message_notification(sender, instance, created, **kwargs):
-    """Create notification when user sends a message."""
-    if not created:  # Only on new message
+@receiver(post_save, sender=Comment)
+def handle_comment_signal(sender, instance, created, **kwargs):
+    """Handle comment notifications for posts and prayer requests."""
+    if not created:
         return
-    
-    # Skip if message is deleted or sender is sending to themselves
-    if instance.is_deleted_for_everyone:
-        return
-    
-    sender_id = str(instance.sender.user_id)
-    conversation_id = str(instance.conversation_id)
     
     try:
-        notification_db = NotificationDB()
+        actor_id = str(instance.user.user_id)
         
-        # Get conversation members
-        members = notification_db.get_conversation_members(conversation_id)
-        
-        for member in members:
-            member_id = str(member.user.user_id)
+        # Handle comment on post
+        if instance.post:
+            post = instance.post
+            recipient_id = str(post.user.user_id)
+            actor_name = instance.user.username
+            recipient_name = post.user.username
             
-            # Skip sender
-            if member_id == sender_id:
-                continue
+            # Don't notify self
+            if actor_id == recipient_id:
+                logger.debug(f"Self-comment prevented: {actor_id} commented on own post")
+                return
             
-            # Skip if user has left the conversation
-            if member.left_at:
-                continue
+            action_msg = (
+                f"🔔 NOTIFICATION ACTION: {actor_name} ({actor_id[:8]}...) commented on post {str(post.post_id)[:8]}... "
+                f"(owned by {recipient_name})"
+            )
+            print(action_msg)
+            logger.info(action_msg)
             
-            # Create notification for each member
-            notification = notification_db.create_notification(
-                recipient_id=member_id,
-                notification_type='NEW_MESSAGE',
-                actor_id=sender_id,
-                target_id=conversation_id,
-                target_type='conversation',
-                conversation_id=instance.conversation_id,
-                message_id=instance.id
+            # Get or create aggregated notification
+            notification, created = storage.get_or_create_aggregated_notification(
+                notification_type=NotificationTypeChoices.COMMENT_ON_POST,
+                target_id=str(post.post_id),
+                target_type='post',
+                actor_id=actor_id,
+                recipient_id=recipient_id
             )
             
-            if notification:
-                broadcast_notification(notification)
+            # Initialize or update metadata (works for both new and existing)
+            storage.update_notification_metadata(
+                notification,
+                actor_id,
+                instance.user.username
+            )
+            
+            # Send via WebSocket
+            send_notification_via_websocket(notification)
+            metadata = notification.metadata or {}
+            actors_count = metadata.get('actors_count', 1)
+            success_msg = (
+                f"✓ COMMENT_ON_POST notification sent{' (AGGREGATED, ' + str(actors_count) + ' actors)' if actors_count > 1 else ''}: "
+                f"notification_id={notification.notification_id}, actor={actor_name} ({actor_id[:8]}...), "
+                f"post={str(post.post_id)[:8]}..., recipient={recipient_name} ({recipient_id[:8]}...)"
+            )
+            print(success_msg)
+            logger.info(success_msg)
+        
+        # Handle comment on prayer request
+        elif instance.prayer_request:
+            prayer_request = instance.prayer_request
+            recipient_id = str(prayer_request.user.user_id)
+            
+            # Don't notify self
+            if actor_id == recipient_id:
+                return
+            
+            # Get or create aggregated notification
+            notification, _ = storage.get_or_create_aggregated_notification(
+                notification_type=NotificationTypeChoices.COMMENT_ON_PRAYER_REQUEST,
+                target_id=str(prayer_request.prayer_request_id),
+                target_type='prayer_request',
+                actor_id=actor_id,
+                recipient_id=recipient_id
+            )
+            
+            # Initialize or update metadata (works for both new and existing)
+            storage.update_notification_metadata(
+                notification,
+                actor_id,
+                instance.user.username
+            )
+            
+            # Send via WebSocket
+            send_notification_via_websocket(notification)
+            logger.info(
+                f"Comment on prayer request notification sent: actor={actor_id}, "
+                f"prayer_request={prayer_request.prayer_request_id}, recipient={recipient_id}"
+            )
     except Exception as e:
-        # Log error but don't break the message operation
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.error(f"Error creating message notification: {e}")
+        logger.error(
+            f"Failed to send comment notification: actor={getattr(instance.user, 'user_id', 'unknown')}, "
+            f"comment_id={getattr(instance, 'comment_id', 'unknown')}, error={str(e)}",
+            exc_info=True
+        )
+        # Don't raise - let the comment action succeed even if notification fails
+
+
+@receiver(post_save, sender=PrayerRequest)
+def handle_prayer_request_created_signal(sender, instance, created, **kwargs):
+    """Handle prayer request created notification (notify followers)."""
+    if not created:
+        return
+    
+    try:
+        actor_id = str(instance.user.user_id)
+        
+        # Get all followers
+        followers = UserFollowers.objects.filter(followed_id__user_id=actor_id).select_related('follower_id')
+        
+        # Notify each follower
+        notified_count = 0
+        for follow in followers:
+            try:
+                follower_id = str(follow.follower_id.user_id)
+                
+                # Create notification for each follower (not aggregated)
+                notification = storage.create_notification(
+                    notification_type=NotificationTypeChoices.PRAYER_REQUEST_CREATED,
+                    target_id=str(instance.prayer_request_id),
+                    target_type='prayer_request',
+                    actor_id=actor_id,
+                    recipient_id=follower_id
+                )
+                
+                # Send via WebSocket
+                send_notification_via_websocket(notification)
+                notified_count += 1
+            except Exception as e:
+                logger.error(
+                    f"Failed to notify follower {getattr(follow.follower_id, 'user_id', 'unknown')} "
+                    f"about prayer request {getattr(instance, 'prayer_request_id', 'unknown')}: {str(e)}",
+                    exc_info=True
+                )
+                # Continue with next follower even if one fails
+        
+        logger.info(
+            f"Prayer request created notifications sent: actor={actor_id}, "
+            f"prayer_request={instance.prayer_request_id}, notified={notified_count}/{followers.count()}"
+        )
+    except Exception as e:
+        logger.error(
+            f"Failed to send prayer request created notifications: "
+            f"actor={getattr(instance.user, 'user_id', 'unknown')}, "
+            f"prayer_request={getattr(instance, 'prayer_request_id', 'unknown')}, error={str(e)}",
+            exc_info=True
+        )
+        # Don't raise - let the prayer request creation succeed even if notification fails
+

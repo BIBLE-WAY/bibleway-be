@@ -8,8 +8,12 @@ import uuid
 from datetime import datetime
 from typing import List, Optional
 from django.db.models import Q, Max
+from django.db import IntegrityError
+from django.utils import timezone
 from project_chat.models import Conversation, ConversationMember, Message, MessageReadReceipt, ConversationTypeChoices
 from bible_way.models import User
+from project_chat.storage.s3_utils import generate_presigned_url
+from bible_way.utils.s3_url_helper import get_presigned_url as get_bible_way_presigned_url
 
 
 class ChatDB:
@@ -174,7 +178,7 @@ class ChatDB:
             msg_id = int(message_id) if isinstance(message_id, str) else message_id
             message = Message.objects.get(id=msg_id)
             message.text = new_text
-            message.edited_at = datetime.now()
+            message.edited_at = timezone.now()
             message.save()
             return message
         except (Message.DoesNotExist, ValueError, TypeError):
@@ -206,10 +210,10 @@ class ChatDB:
             receipt, created = MessageReadReceipt.objects.get_or_create(
                 message=message,
                 user=user,
-                defaults={'read_at': datetime.now()}
+                defaults={'read_at': timezone.now()}
             )
             if not created:
-                receipt.read_at = datetime.now()
+                receipt.read_at = timezone.now()
                 receipt.save()
             
             # Update conversation member's last_read_at
@@ -219,7 +223,7 @@ class ChatDB:
                 left_at__isnull=True
             ).first()
             if member:
-                member.last_read_at = datetime.now()
+                member.last_read_at = timezone.now()
                 member.save()
             
             return True
@@ -245,10 +249,10 @@ class ChatDB:
             receipt, created = MessageReadReceipt.objects.get_or_create(
                 message=message,
                 user=user,
-                defaults={'read_at': datetime.now()}
+                defaults={'read_at': timezone.now()}
             )
             if not created:
-                receipt.read_at = datetime.now()
+                receipt.read_at = timezone.now()
                 receipt.save()
             
             # Update conversation member's last_read_at if conversation_id provided
@@ -260,7 +264,7 @@ class ChatDB:
                     left_at__isnull=True
                 ).first()
                 if member:
-                    member.last_read_at = datetime.now()
+                    member.last_read_at = timezone.now()
                     member.save()
             
             return receipt
@@ -284,7 +288,7 @@ class ChatDB:
                 return False
             
             # Update last_read_at to now
-            member.last_read_at = datetime.now()
+            member.last_read_at = timezone.now()
             member.save()
             
             # Optionally create read receipts for all unread messages
@@ -300,7 +304,7 @@ class ChatDB:
                 MessageReadReceipt.objects.get_or_create(
                     message=message,
                     user=user,
-                    defaults={'read_at': datetime.now()}
+                    defaults={'read_at': timezone.now()}
                 )
             
             return True
@@ -325,21 +329,51 @@ class ChatDB:
             
             # Create new conversation
             user1 = User.objects.get(user_id=user1_uuid)
+            user2 = User.objects.get(user_id=user2_uuid)
             conversation = Conversation.objects.create(
                 type=ConversationTypeChoices.DIRECT,
                 created_by=user1,
                 is_active=True
             )
             
-            # Add both users as members
-            ConversationMember.objects.create(
-                conversation=conversation,
-                user=user1
-            )
-            ConversationMember.objects.create(
-                conversation=conversation,
-                user=User.objects.get(user_id=user2_uuid)
-            )
+            # Add both users as members using update_or_create to prevent duplicates
+            # Wrap in try-except to handle IntegrityError from race conditions
+            try:
+                ConversationMember.objects.update_or_create(
+                    conversation=conversation,
+                    user=user1,
+                    defaults={'left_at': None}
+                )
+                ConversationMember.objects.update_or_create(
+                    conversation=conversation,
+                    user=user2,
+                    defaults={'left_at': None}
+                )
+            except IntegrityError as e:
+                # Handle race condition - membership might have been created concurrently
+                print(f"IntegrityError in get_or_create_direct_conversation (membership): {e}")
+                # Try to get existing memberships and reactivate if needed
+                try:
+                    membership1 = ConversationMember.objects.get(
+                        conversation=conversation,
+                        user=user1
+                    )
+                    if membership1.left_at is not None:
+                        membership1.left_at = None
+                        membership1.save()
+                except ConversationMember.DoesNotExist:
+                    pass
+                
+                try:
+                    membership2 = ConversationMember.objects.get(
+                        conversation=conversation,
+                        user=user2
+                    )
+                    if membership2.left_at is not None:
+                        membership2.left_at = None
+                        membership2.save()
+                except ConversationMember.DoesNotExist:
+                    pass
             
             return conversation
         except Exception as e:
@@ -401,24 +435,35 @@ class ChatDB:
             conv_id = self._safe_convert_conversation_id(conversation_id)
             user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
             
-            # Check if already a member
-            membership = ConversationMember.objects.filter(
-                conversation_id=conv_id,
-                user_id=user_uuid,
-                left_at__isnull=True
-            ).first()
-            
-            if membership:
-                return True  # Already a member
-            
-            # Add user as member
+            # Get conversation and user objects
             conversation = Conversation.objects.get(id=conv_id)
             user = User.objects.get(user_id=user_uuid)
-            ConversationMember.objects.create(
-                conversation=conversation,
-                user=user
+            
+            # Use update_or_create to handle both creation and reactivation atomically
+            # This ensures left_at is always None (user is active) regardless of previous state
+            membership, created = ConversationMember.objects.update_or_create(
+                conversation_id=conv_id,
+                user_id=user_uuid,
+                defaults={'left_at': None}
             )
+            
             return True
+        except IntegrityError as e:
+            # Handle race condition where membership was created between check and create
+            print(f"IntegrityError in ensure_user_membership (race condition): {e}, conversation_id={conversation_id}, user_id={user_id}")
+            try:
+                # Attempt to fetch and reactivate the existing membership
+                membership = ConversationMember.objects.get(
+                    conversation_id=conv_id,
+                    user_id=user_uuid
+                )
+                if membership.left_at is not None:
+                    membership.left_at = None
+                    membership.save()
+                return True
+            except ConversationMember.DoesNotExist:
+                print(f"Could not recover from IntegrityError: membership not found")
+                return False
         except (Conversation.DoesNotExist, User.DoesNotExist) as e:
             print(f"Error in ensure_user_membership (object not found): {type(e).__name__}: {e}, conversation_id={conversation_id}, user_id={user_id}")
             return False
@@ -443,12 +488,51 @@ class ChatDB:
                 conversation_id=conv_id
             ).select_related('sender', 'reply_to', 'shared_post').order_by('-created_at')
             
+            # Get all active conversation members (for is_seen calculation)
+            all_members = ConversationMember.objects.filter(
+                conversation_id=conv_id,
+                left_at__isnull=True
+            ).select_related('user')
+            member_user_ids = {str(m.user.user_id) for m in all_members}
+            
+            # Get all read receipts for all messages in this conversation (optimization)
+            all_receipts = MessageReadReceipt.objects.filter(
+                message__conversation_id=conv_id
+            ).select_related('message', 'user').values('message_id', 'user__user_id')
+            
+            # Group receipts by message_id for efficient lookup
+            receipts_by_message = {}
+            for receipt in all_receipts:
+                msg_id = receipt['message_id']
+                user_id = str(receipt['user__user_id'])
+                if msg_id not in receipts_by_message:
+                    receipts_by_message[msg_id] = set()
+                receipts_by_message[msg_id].add(user_id)
+            
             messages_data = []
             for message in messages:
                 # Determine if sent by current user
                 is_sent_by_me = False
                 if user_uuid:
                     is_sent_by_me = (str(message.sender.user_id) == str(user_uuid))
+                
+                # Calculate is_seen - check if ALL members have read this message
+                is_seen = False
+                
+                # Get members who should have read (all except sender)
+                # Sender doesn't need a read receipt (they sent it)
+                members_who_should_have_read = member_user_ids - {str(message.sender.user_id)}
+                
+                if members_who_should_have_read:
+                    # Get read receipts for this message
+                    read_receipt_user_ids = receipts_by_message.get(message.id, set())
+                    
+                    # Check if all members who should have read, actually have read receipts
+                    members_who_have_read = read_receipt_user_ids & members_who_should_have_read
+                    is_seen = (len(members_who_have_read) == len(members_who_should_have_read))
+                else:
+                    # Only sender in conversation (direct message to self or single member)
+                    is_seen = True
                 
                 # Format shared post if exists
                 shared_post_data = None
@@ -462,7 +546,7 @@ class ChatDB:
                             {
                                 'media_id': str(media.media_id),
                                 'media_type': media.media_type,
-                                'url': media.url
+                                'url': get_bible_way_presigned_url(media.url)
                             }
                             for media in message.shared_post.media.all()[:3]  # Limit to 3 for preview
                         ]
@@ -472,12 +556,12 @@ class ChatDB:
                     'message_id': str(message.id),
                     'sender': {
                         'user_id': str(message.sender.user_id),
-                        'user_name': message.sender.user_name,
-                        'profile_picture_url': message.sender.profile_picture_url or ''
+                        'user_name': message.sender.username,
+                        'profile_picture_url': get_bible_way_presigned_url(message.sender.profile_picture_url) if message.sender.profile_picture_url else ''
                     },
                     'text': message.text,
                     'file': {
-                        'url': message.file,
+                        'url': generate_presigned_url(message.file) if message.file else None,
                         'type': message.file_type,
                         'size': message.file_size,
                         'name': message.file_name
@@ -487,13 +571,183 @@ class ChatDB:
                     'created_at': message.created_at.isoformat() if message.created_at else None,
                     'edited_at': message.edited_at.isoformat() if message.edited_at else None,
                     'is_deleted_for_everyone': message.is_deleted_for_everyone,
-                    'is_sent_by_me': is_sent_by_me
+                    'is_sent_by_me': is_sent_by_me,
+                    'is_seen': is_seen
                 }
                 messages_data.append(message_data)
             
             return messages_data
         except (ValueError, TypeError, OverflowError):
             return []
+    
+    def get_conversation_inbox_entry(self, user_id: str, conversation_id: str) -> Optional[dict]:
+        """
+        Get inbox entry for a specific conversation and user.
+        
+        This method computes a single conversation's inbox entry for a specific user,
+        including user-specific unread count and latest message.
+        
+        Args:
+            user_id: ID of the user
+            conversation_id: ID of the conversation
+            
+        Returns:
+            Dictionary with conversation_id, latest_message, unread_count, etc.
+            Returns None if user is not a member or conversation doesn't exist
+        """
+        try:
+            user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+            conv_id = self._safe_convert_conversation_id(conversation_id)
+            
+            # Get user's membership in this conversation
+            membership = ConversationMember.objects.filter(
+                user__user_id=user_uuid,
+                conversation_id=conv_id,
+                left_at__isnull=True
+            ).select_related('conversation', 'user').first()
+            
+            if not membership:
+                return None
+            
+            conversation = membership.conversation
+            
+            # Check if conversation is active
+            if not conversation.is_active:
+                return None
+            
+            # Get last message
+            last_message = Message.objects.filter(
+                conversation_id=conversation.id,
+                is_deleted_for_everyone=False
+            ).select_related('sender').order_by('-created_at').first()
+            
+            # Determine if last message was sent by this user (for unread count calculation)
+            is_sent_by_me = False
+            if last_message:
+                is_sent_by_me = (str(last_message.sender.user_id) == str(user_uuid))
+            
+            # Format last message if exists
+            last_message_data = None
+            if last_message:
+                
+                # Determine if user has seen the last message
+                is_seen = False
+                if is_sent_by_me:
+                    # User sent the message, so they've seen it
+                    is_seen = True
+                else:
+                    # Check if user has read this message
+                    if membership.last_read_at and last_message.created_at:
+                        # Both should already be timezone-aware, but ensure consistency
+                        last_read = membership.last_read_at
+                        created = last_message.created_at
+                        # Normalize to UTC if needed (Django stores in UTC when USE_TZ=True)
+                        if timezone.is_aware(last_read) and timezone.is_aware(created):
+                            is_seen = (last_read >= created)
+                        else:
+                            # Fallback: should not happen with proper timezone handling
+                            is_seen = False
+                    else:
+                        # User has never read any messages in this conversation
+                        is_seen = False
+                
+                last_message_data = {
+                    'message_id': str(last_message.id),
+                    'text': last_message.text,
+                    'sender': {
+                        'user_id': str(last_message.sender.user_id),
+                        'user_name': last_message.sender.username,
+                        'profile_picture_url': get_bible_way_presigned_url(last_message.sender.profile_picture_url) if last_message.sender.profile_picture_url else ''
+                    },
+                    'file': {
+                        'url': generate_presigned_url(last_message.file) if last_message.file else None,
+                        'type': last_message.file_type,
+                        'name': last_message.file_name
+                    } if last_message.file else None,
+                    'created_at': last_message.created_at.isoformat() if last_message.created_at else None,
+                    'is_sent_by_me': is_sent_by_me,
+                    'is_seen': is_seen
+                }
+            
+            # Get other member(s) based on conversation type
+            other_member = None
+            members_data = []
+            
+            if conversation.type == ConversationTypeChoices.DIRECT:
+                # Get the other member (not current user)
+                other_membership = ConversationMember.objects.filter(
+                    conversation_id=conversation.id,
+                    left_at__isnull=True
+                ).exclude(user__user_id=user_uuid).select_related('user').first()
+                
+                if other_membership:
+                    other_member = {
+                        'user_id': str(other_membership.user.user_id),
+                        'user_name': other_membership.user.username,
+                        'profile_picture_url': get_bible_way_presigned_url(other_membership.user.profile_picture_url) if other_membership.user.profile_picture_url else ''
+                    }
+            else:
+                # GROUP conversation - get all members
+                all_members = ConversationMember.objects.filter(
+                    conversation_id=conversation.id,
+                    left_at__isnull=True
+                ).select_related('user')
+                
+                for mem in all_members:
+                    members_data.append({
+                        'user_id': str(mem.user.user_id),
+                        'user_name': mem.user.username,
+                        'profile_picture_url': get_bible_way_presigned_url(mem.user.profile_picture_url) if mem.user.profile_picture_url else ''
+                    })
+            
+            # Calculate unread count (messages after last_read_at)
+            # For sender of the last message, unread_count is always 0
+            unread_count = 0
+            if last_message and is_sent_by_me:
+                # Sender always has unread_count = 0
+                unread_count = 0
+            else:
+                # Calculate unread count for receivers
+                if membership.last_read_at:
+                    unread_count = Message.objects.filter(
+                        conversation_id=conversation.id,
+                        is_deleted_for_everyone=False,
+                        created_at__gt=membership.last_read_at
+                    ).exclude(sender__user_id=user_uuid).count()
+                else:
+                    # If never read, count all messages not sent by user
+                    unread_count = Message.objects.filter(
+                        conversation_id=conversation.id,
+                        is_deleted_for_everyone=False
+                    ).exclude(sender__user_id=user_uuid).count()
+            
+            # Determine last activity timestamp
+            if last_message:
+                last_activity_at = last_message.created_at
+            else:
+                last_activity_at = conversation.updated_at
+            
+            conversation_data = {
+                'conversation_id': conversation.id,
+                'type': conversation.type,
+                'name': conversation.name or '',
+                'description': conversation.description or '',
+                'image': get_bible_way_presigned_url(conversation.image.url) if conversation.image and conversation.image.url else '',
+                'is_active': conversation.is_active,
+                'last_message': last_message_data,
+                'other_member': other_member,  # For DIRECT
+                'members': members_data,  # For GROUP
+                'members_count': len(members_data) if members_data else 0,  # For GROUP
+                'unread_count': unread_count,
+                'last_activity_at': last_activity_at.isoformat() if last_activity_at else None
+            }
+            
+            return conversation_data
+        except (ValueError, TypeError, OverflowError) as e:
+            import traceback
+            print(f"Error in get_conversation_inbox_entry: {e}")
+            print(traceback.format_exc())
+            return None
     
     def get_user_conversations(self, user_id: str) -> list:
         """Get all conversations for a user with last message preview."""
@@ -532,9 +786,15 @@ class ChatDB:
                     else:
                         # Check if user has read this message
                         if membership.last_read_at and last_message.created_at:
-                            # User has read messages up to last_read_at
-                            # If last_read_at is after or equal to message created_at, they've seen it
-                            is_seen = (membership.last_read_at >= last_message.created_at)
+                            # Both should already be timezone-aware, but ensure consistency
+                            last_read = membership.last_read_at
+                            created = last_message.created_at
+                            # Normalize to UTC if needed (Django stores in UTC when USE_TZ=True)
+                            if timezone.is_aware(last_read) and timezone.is_aware(created):
+                                is_seen = (last_read >= created)
+                            else:
+                                # Fallback: should not happen with proper timezone handling
+                                is_seen = False
                         else:
                             # User has never read any messages in this conversation
                             is_seen = False
@@ -544,11 +804,11 @@ class ChatDB:
                         'text': last_message.text,
                         'sender': {
                             'user_id': str(last_message.sender.user_id),
-                            'user_name': last_message.sender.user_name,
-                            'profile_picture_url': last_message.sender.profile_picture_url or ''
+                            'user_name': last_message.sender.username,
+                            'profile_picture_url': get_bible_way_presigned_url(last_message.sender.profile_picture_url) if last_message.sender.profile_picture_url else ''
                         },
                         'file': {
-                            'url': last_message.file,
+                            'url': generate_presigned_url(last_message.file) if last_message.file else None,
                             'type': last_message.file_type,
                             'name': last_message.file_name
                         } if last_message.file else None,
@@ -571,8 +831,8 @@ class ChatDB:
                     if other_membership:
                         other_member = {
                             'user_id': str(other_membership.user.user_id),
-                            'user_name': other_membership.user.user_name,
-                            'profile_picture_url': other_membership.user.profile_picture_url or ''
+                            'user_name': other_membership.user.username,
+                            'profile_picture_url': get_bible_way_presigned_url(other_membership.user.profile_picture_url) if other_membership.user.profile_picture_url else ''
                         }
                 else:
                     # GROUP conversation - get all members
@@ -584,8 +844,8 @@ class ChatDB:
                     for mem in all_members:
                         members_data.append({
                             'user_id': str(mem.user.user_id),
-                            'user_name': mem.user.user_name,
-                            'profile_picture_url': mem.user.profile_picture_url or ''
+                            'user_name': mem.user.username,
+                            'profile_picture_url': get_bible_way_presigned_url(mem.user.profile_picture_url) if mem.user.profile_picture_url else ''
                         })
                 
                 # Calculate unread count (messages after last_read_at)
@@ -614,7 +874,7 @@ class ChatDB:
                     'type': conversation.type,
                     'name': conversation.name or '',
                     'description': conversation.description or '',
-                    'image': conversation.image.url if conversation.image else '',
+                    'image': get_bible_way_presigned_url(conversation.image.url) if conversation.image and conversation.image.url else '',
                     'is_active': conversation.is_active,
                     'last_message': last_message_data,
                     'other_member': other_member,  # For DIRECT

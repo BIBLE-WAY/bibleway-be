@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional
 from project_chat.storage import ChatDB
 from project_chat.presenters.message_response import MessageResponse
 from project_chat.presenters.chat_error_response import ChatErrorResponse
+from django.utils import timezone
 
 
 class MarkReadInteractor:
@@ -59,13 +60,12 @@ class MarkReadInteractor:
                 return self.error_response.server_error(request_id)
         
         # Return success acknowledgment
-        from datetime import datetime
         return self.response.success_ack(
             request_id=request_id,
             action="mark_read",
             data={
                 "conversation_id": conversation_id,
-                "last_read_at": datetime.now().isoformat()
+                "last_read_at": timezone.now().isoformat()
             }
         )
     

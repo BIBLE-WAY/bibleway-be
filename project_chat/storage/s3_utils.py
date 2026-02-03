@@ -8,7 +8,9 @@ Supports both Django UploadedFile objects and bytes.
 import os
 import boto3
 import uuid
+import re
 from io import BytesIO
+from urllib.parse import urlparse
 from django.conf import settings
 from typing import Optional
 
@@ -22,6 +24,115 @@ s3_client = boto3.client(
 
 BUCKET_NAME = settings.AWS_STORAGE_BUCKET_NAME
 REGION = settings.AWS_S3_REGION_NAME
+
+
+def extract_s3_key_from_url(url: str) -> str:
+    """
+    Extract S3 key from full S3 URL.
+    
+    Args:
+        url: Full S3 URL like https://bucket.s3.region.amazonaws.com/key
+        
+    Returns:
+        S3 key path
+    """
+    if not url:
+        return ""
+    
+    # If it's already a key (no http/https), return as-is
+    if not url.startswith(('http://', 'https://')):
+        return url
+    
+    try:
+        parsed = urlparse(url)
+        # Remove leading slash from path
+        key = parsed.path.lstrip('/')
+        return key
+    except Exception:
+        # Fallback: try regex extraction
+        match = re.search(r'\.s3\.[^/]+\.amazonaws\.com/(.+)$', url)
+        if match:
+            return match.group(1)
+        return url
+
+
+def get_public_url(url_or_key: str) -> str:
+    """
+    Convert S3 URL or key to permanent public URL (no expiration).
+    
+    This constructs a public S3 URL that doesn't expire, assuming the bucket/objects
+    are configured with public-read ACL.
+    
+    Args:
+        url_or_key: Full S3 URL or S3 key path
+        
+    Returns:
+        Public S3 URL string (permanent, no expiration)
+    """
+    if not url_or_key:
+        return ""
+    
+    # Extract key if full URL provided
+    key = extract_s3_key_from_url(url_or_key)
+    
+    if not key:
+        return url_or_key  # Return original if extraction fails
+    
+    try:
+        # Check for custom domain first
+        if hasattr(settings, 'AWS_S3_CUSTOM_DOMAIN') and settings.AWS_S3_CUSTOM_DOMAIN:
+            public_url = f"https://{settings.AWS_S3_CUSTOM_DOMAIN}/{key}"
+        else:
+            # Construct public S3 URL
+            # Format: https://bucket-name.s3.region.amazonaws.com/key
+            public_url = f"https://{BUCKET_NAME}.s3.{REGION}.amazonaws.com/{key}"
+        return public_url
+    except Exception:
+        # If construction fails, return original URL/key
+        return url_or_key
+
+
+def generate_presigned_url(s3_key: str, expiration: int = None) -> str:
+    """
+    Generate presigned URL or public URL for S3 object.
+    
+    Args:
+        s3_key: S3 key path or full S3 URL (will extract key if URL provided)
+        expiration: Expiration time in seconds (defaults to AWS_S3_PRESIGNED_URL_EXPIRATION setting)
+        
+    Returns:
+        Presigned URL if presigned URLs are enabled, otherwise public URL
+    """
+    if not s3_key:
+        return ""
+    
+    # Check if presigned URLs are enabled
+    use_presigned = getattr(settings, 'AWS_S3_USE_PRESIGNED_URLS', False)
+    
+    if not use_presigned:
+        # Return public URL for faster access (no expiration)
+        return get_public_url(s3_key)
+    
+    # Extract key if full URL provided
+    key = extract_s3_key_from_url(s3_key)
+    
+    if not key:
+        return s3_key  # Return original if extraction fails
+    
+    # Use default expiration from settings if not provided
+    if expiration is None:
+        expiration = getattr(settings, 'AWS_S3_PRESIGNED_URL_EXPIRATION', 3600)
+    
+    try:
+        presigned_url = s3_client.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': BUCKET_NAME, 'Key': key},
+            ExpiresIn=expiration
+        )
+        return presigned_url
+    except Exception as e:
+        # If presigned URL generation fails, return public URL for backward compatibility
+        return get_public_url(s3_key)
 
 
 def upload_chat_file_to_s3(

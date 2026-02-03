@@ -10,6 +10,9 @@ import uuid
 import base64
 import os
 import mimetypes
+from django.utils import timezone
+from project_chat.storage.s3_utils import generate_presigned_url
+from bible_way.utils.s3_url_helper import get_presigned_url as get_bible_way_presigned_url
 
 # Error codes
 class ErrorCodes:
@@ -42,43 +45,25 @@ ALLOWED_AUDIO_EXTENSIONS = ['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac', '.w
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
-from django.conf import settings
-from project_chat.storage.redis_state import check_rate_limit_redis
-
-# Rate limiting storage (in-memory, per user) – used as a fallback when Redis
-# is not enabled or not desired.
+# Rate limiting storage (in-memory, per user)
 _rate_limit_storage: Dict[str, Dict] = {}
 
 
 def check_rate_limit(user_id: str, action: str, max_requests: int = 30, window_seconds: int = 30) -> tuple[bool, Optional[int]]:
     """
     Check if user has exceeded rate limit for an action.
-
-    If Redis is enabled (`USE_REDIS=True`), this will use a Redis-backed sliding
-    window so rate limiting state is shared across workers and survives process
-    restarts. Otherwise, it falls back to the in-memory implementation.
-
+    
     Args:
         user_id: User ID
         action: Action name (e.g., 'send_message')
         max_requests: Maximum requests allowed
         window_seconds: Time window in seconds
-
+        
     Returns:
         Tuple of (is_allowed, remaining_requests)
     """
-    # Prefer Redis-based rate limiting when enabled.
-    if getattr(settings, "USE_REDIS", False):
-        is_allowed, remaining = check_rate_limit_redis(
-            user_id=user_id,
-            action=action,
-            max_requests=max_requests,
-            window_seconds=window_seconds,
-        )
-        return is_allowed, remaining
-
     key = f"{user_id}:{action}"
-    now = datetime.now()
+    now = timezone.now()
     
     if key not in _rate_limit_storage:
         _rate_limit_storage[key] = {
@@ -186,7 +171,7 @@ def can_edit_message(message_created_at: datetime, hours_limit: int = 24) -> boo
     if not message_created_at:
         return False
     
-    time_diff = datetime.now(message_created_at.tzinfo) - message_created_at
+    time_diff = timezone.now() - message_created_at
     return time_diff <= timedelta(hours=hours_limit)
 
 
@@ -204,7 +189,7 @@ def can_delete_message(message_created_at: datetime, days_limit: int = 7) -> boo
     if not message_created_at:
         return False
     
-    time_diff = datetime.now(message_created_at.tzinfo) - message_created_at
+    time_diff = timezone.now() - message_created_at
     return time_diff <= timedelta(days=days_limit)
 
 
@@ -223,7 +208,7 @@ def serialize_message(message, include_sender_info: bool = True) -> dict:
         'message_id': str(message.id),
         'conversation_id': str(message.conversation_id),
         'text': message.text,
-        'file': message.file.url if message.file else None,
+        'file': generate_presigned_url(message.file) if message.file else None,
         'reply_to_id': str(message.reply_to_id) if message.reply_to else None,
         'created_at': message.created_at.isoformat() if message.created_at else None,
         'edited_at': message.edited_at.isoformat() if message.edited_at else None,
@@ -232,7 +217,7 @@ def serialize_message(message, include_sender_info: bool = True) -> dict:
     
     if include_sender_info:
         data['sender_id'] = str(message.sender.user_id)
-        data['sender_name'] = message.sender.user_name
+        data['sender_name'] = message.sender.username
         data['sender_email'] = message.sender.email
     
     return data
@@ -254,7 +239,7 @@ def serialize_conversation(conversation, user_id: str = None) -> dict:
         'type': conversation.type,
         'name': conversation.name,
         'description': conversation.description,
-        'image': conversation.image.url if conversation.image else None,
+        'image': get_bible_way_presigned_url(conversation.image.url) if conversation.image and conversation.image.url else None,
         'created_by_id': str(conversation.created_by.user_id) if conversation.created_by else None,
         'created_at': conversation.created_at.isoformat() if conversation.created_at else None,
         'updated_at': conversation.updated_at.isoformat() if conversation.updated_at else None,

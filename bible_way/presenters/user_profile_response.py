@@ -18,7 +18,10 @@ class UserProfileResponse:
                     "country": response_dto.country,
                     "age": response_dto.age,
                     "preferred_language": response_dto.preferred_language,
-                    "profile_picture_url": response_dto.profile_picture_url
+                    "profile_picture_url": response_dto.profile_picture_url,
+                    "is_admin": response_dto.is_admin,
+                    "following_count": response_dto.following_count,
+                    "followers_count": response_dto.followers_count
                 }
             },
             status=status.HTTP_200_OK

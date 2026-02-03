@@ -16,11 +16,19 @@ class CreatePostResponse:
         )
 
     @staticmethod
-    def invalid_media_type_response() -> Response:
+    def invalid_media_type_response(filename: str = None) -> Response:
+        base_message = "Invalid file format. Only images, videos, and audio files are allowed."
+        supported_formats = "Supported formats: Images (jpg, jpeg, png, gif, webp, bmp, svg), Videos (mp4, mov, avi, mkv, webm, flv, wmv, m4v), Audio (mp3, wav, aac, ogg, m4a, flac)"
+        
+        if filename:
+            error_message = f"{base_message} File '{filename}' is not a supported format. {supported_formats}"
+        else:
+            error_message = f"{base_message} {supported_formats}"
+        
         return Response(
             {
                 "success": False,
-                "error": "Invalid media type. Only images, videos, and audio files are allowed",
+                "error": error_message,
                 "error_code": "INVALID_MEDIA_TYPE"
             },
             status=status.HTTP_400_BAD_REQUEST

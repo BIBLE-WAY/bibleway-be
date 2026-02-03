@@ -1,5 +1,4 @@
 from django.contrib import admin
-from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from .models import (
     User,
     UserFollowers,
@@ -11,12 +10,14 @@ from .models import (
     Promotion,
     PromotionImage,
     PrayerRequest,
+    Testimonial,
     Verse,
+    ShareLink,
     Category,
     Language,
     AgeGroup,
     Book,
-    BookContent,
+    Chapters,
     ReadingProgress,
     ReadingNote,
     Highlight,
@@ -24,25 +25,19 @@ from .models import (
 
 
 @admin.register(User)
-class UserAdmin(BaseUserAdmin):
-    list_display = ('user_name', 'email', 'country', 'age', 'preferred_language', 'is_staff', 'is_active')
-    list_filter = ('is_staff', 'is_active', 'country', 'preferred_language')
-    search_fields = ('user_name', 'email', 'country')
-    ordering = ('user_name',)
+class UserAdmin(admin.ModelAdmin):
+    list_display = ('username', 'email', 'country', 'age', 'preferred_language', 'auth_provider', 'is_email_verified', 'is_staff', 'is_active')
+    list_filter = ('is_staff', 'is_active', 'country', 'preferred_language', 'auth_provider', 'is_email_verified')
+    search_fields = ('username', 'email', 'country', 'google_id')
+    ordering = ('username',)
     readonly_fields = ('user_id',)
-    fieldsets = BaseUserAdmin.fieldsets + (
-        ('Additional Info', {'fields': ('user_id', 'user_name', 'country', 'age', 'preferred_language')}),
-    )
-    add_fieldsets = BaseUserAdmin.add_fieldsets + (
-        ('Additional Info', {'fields': ('user_name', 'email', 'country', 'age', 'preferred_language')}),
-    )
-
+    
 
 @admin.register(UserFollowers)
 class UserFollowersAdmin(admin.ModelAdmin):
     list_display = ('id', 'follower_id', 'followed_id', 'created_at')
     list_filter = ('created_at',)
-    search_fields = ('follower_id__user_name', 'followed_id__user_name')
+    search_fields = ('follower_id__username', 'followed_id__username')
     readonly_fields = ('id', 'created_at')
 
 
@@ -72,7 +67,7 @@ class AgeGroupAdmin(admin.ModelAdmin):
 class PostAdmin(admin.ModelAdmin):
     list_display = ('post_id', 'user', 'title', 'created_at', 'updated_at')
     list_filter = ('created_at', 'updated_at')
-    search_fields = ('title', 'description', 'user__user_name', 'user__email')
+    search_fields = ('title', 'description', 'user__username', 'user__email')
     readonly_fields = ('post_id', 'created_at', 'updated_at')
     raw_id_fields = ('user',)
     date_hierarchy = 'created_at'
@@ -80,18 +75,18 @@ class PostAdmin(admin.ModelAdmin):
 
 @admin.register(Media)
 class MediaAdmin(admin.ModelAdmin):
-    list_display = ('media_id', 'post', 'media_type', 'url', 'created_at')
+    list_display = ('media_id', 'post', 'prayer_request', 'media_type', 'url', 'created_at')
     list_filter = ('media_type', 'created_at')
-    search_fields = ('post__title', 'url')
+    search_fields = ('post__title', 'prayer_request__description', 'url')
     readonly_fields = ('media_id', 'created_at')
-    raw_id_fields = ('post',)
+    raw_id_fields = ('post', 'prayer_request')
 
 
 @admin.register(Comment)
 class CommentAdmin(admin.ModelAdmin):
     list_display = ('comment_id', 'post', 'user', 'description_preview', 'created_at', 'updated_at')
     list_filter = ('created_at', 'updated_at')
-    search_fields = ('description', 'user__user_name', 'post__title')
+    search_fields = ('description', 'user__username', 'post__title')
     readonly_fields = ('comment_id', 'created_at', 'updated_at')
     raw_id_fields = ('post', 'user')
     
@@ -104,7 +99,7 @@ class CommentAdmin(admin.ModelAdmin):
 class ReactionAdmin(admin.ModelAdmin):
     list_display = ('reaction_id', 'user', 'reaction_type', 'post', 'comment', 'created_at')
     list_filter = ('reaction_type', 'created_at')
-    search_fields = ('user__user_name', 'post__title')
+    search_fields = ('user__username', 'post__title')
     readonly_fields = ('reaction_id', 'created_at')
     raw_id_fields = ('user', 'post', 'comment')
 
@@ -113,7 +108,7 @@ class ReactionAdmin(admin.ModelAdmin):
 class ShareAdmin(admin.ModelAdmin):
     list_display = ('share_id', 'post', 'shared_by', 'shared_to', 'created_at')
     list_filter = ('created_at',)
-    search_fields = ('post__title', 'shared_by__user_name', 'shared_to__user_name', 'message')
+    search_fields = ('post__title', 'shared_by__username', 'shared_to__username', 'message')
     readonly_fields = ('share_id', 'created_at')
     raw_id_fields = ('post', 'shared_by', 'shared_to')
 
@@ -124,7 +119,6 @@ class PromotionAdmin(admin.ModelAdmin):
     list_filter = ('created_at', 'updated_at')
     search_fields = ('title', 'description', 'redirect_link')
     readonly_fields = ('promotion_id', 'created_at', 'updated_at')
-    raw_id_fields = ('media',)
 
 
 @admin.register(PromotionImage)
@@ -138,11 +132,28 @@ class PromotionImageAdmin(admin.ModelAdmin):
 
 @admin.register(PrayerRequest)
 class PrayerRequestAdmin(admin.ModelAdmin):
-    list_display = ('prayer_request_id', 'user', 'name', 'email', 'phone_number', 'created_at', 'updated_at')
+    list_display = ('prayer_request_id', 'user', 'description_preview', 'created_at', 'updated_at')
     list_filter = ('created_at', 'updated_at')
-    search_fields = ('name', 'email', 'phone_number', 'description', 'user__user_name')
+    search_fields = ('description', 'user__username')
     readonly_fields = ('prayer_request_id', 'created_at', 'updated_at')
     raw_id_fields = ('user',)
+    
+    def description_preview(self, obj):
+        return obj.description[:50] + '...' if len(obj.description) > 50 else obj.description
+    description_preview.short_description = 'Description Preview'
+
+
+@admin.register(Testimonial)
+class TestimonialAdmin(admin.ModelAdmin):
+    list_display = ('testimonial_id', 'user', 'description_preview', 'rating', 'is_verified', 'created_at', 'updated_at')
+    list_filter = ('is_verified', 'rating', 'created_at', 'updated_at')
+    search_fields = ('description', 'user__username')
+    readonly_fields = ('testimonial_id', 'created_at', 'updated_at')
+    raw_id_fields = ('user',)
+    
+    def description_preview(self, obj):
+        return obj.description[:50] + '...' if len(obj.description) > 50 else obj.description
+    description_preview.short_description = 'Description Preview'
 
 
 @admin.register(Verse)
@@ -161,38 +172,54 @@ class VerseAdmin(admin.ModelAdmin):
 
 @admin.register(Book)
 class BookAdmin(admin.ModelAdmin):
-    list_display = ('book_id', 'title', 'category', 'age_group', 'language', 'author', 'book_order', 'created_at')
-    list_filter = ('category', 'age_group', 'language', 'created_at')
-    search_fields = ('title', 'description', 'author')
+    list_display = ('book_id', 'title', 'category', 'age_group', 'language', 'book_order', 'is_active', 'created_at')
+    list_filter = ('category', 'age_group', 'language', 'is_active', 'created_at')
+    search_fields = ('title', 'description')
     readonly_fields = ('book_id', 'created_at', 'updated_at')
     raw_id_fields = ('category', 'age_group', 'language')
 
 
-@admin.register(BookContent)
-class BookContentAdmin(admin.ModelAdmin):
-    list_display = ('book_content_id', 'book', 'chapter_number', 'chapter_title', 'content_order', 'created_at')
-    list_filter = ('created_at', 'updated_at')
-    search_fields = ('chapter_title', 'content', 'book__title')
-    readonly_fields = ('book_content_id', 'created_at', 'updated_at')
+@admin.register(Chapters)
+class ChaptersAdmin(admin.ModelAdmin):
+    list_display = ('chapter_id', 'book', 'chapter_number', 'chapter_name', 'title', 'metadata', 'created_at', 'updated_at')
+    list_filter = ('book', 'created_at', 'updated_at')
+    search_fields = ('title', 'chapter_name', 'description', 'book__title')
+    readonly_fields = ('chapter_id', 'created_at', 'updated_at')
     raw_id_fields = ('book',)
+    fieldsets = (
+        ('Basic Information', {
+            'fields': ('book', 'chapter_number', 'chapter_name', 'title', 'description')
+        }),
+        ('Content', {
+            'fields': ('chapter_url',)
+        }),
+        ('Metadata', {
+            'fields': ('metadata',),
+            'description': 'Additional metadata (e.g., testament: Old/New) as JSON'
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
 
 
 @admin.register(ReadingProgress)
 class ReadingProgressAdmin(admin.ModelAdmin):
     list_display = ('reading_progress_id', 'user', 'book', 'progress_percentage', 'last_read_at', 'updated_at')
     list_filter = ('last_read_at', 'updated_at')
-    search_fields = ('user__user_name', 'book__title')
+    search_fields = ('user__username', 'book__title')
     readonly_fields = ('reading_progress_id', 'created_at', 'updated_at')
-    raw_id_fields = ('user', 'book', 'book_content')
+    raw_id_fields = ('user', 'book')
 
 
 @admin.register(ReadingNote)
 class ReadingNoteAdmin(admin.ModelAdmin):
-    list_display = ('note_id', 'user', 'book', 'book_content', 'note_preview', 'created_at', 'updated_at')
+    list_display = ('note_id', 'user', 'book', 'note_preview', 'created_at', 'updated_at')
     list_filter = ('created_at', 'updated_at')
-    search_fields = ('note_text', 'user__user_name', 'book__title')
+    search_fields = ('note_text', 'user__username', 'book__title')
     readonly_fields = ('note_id', 'created_at', 'updated_at')
-    raw_id_fields = ('user', 'book', 'book_content')
+    raw_id_fields = ('user', 'book')
     
     def note_preview(self, obj):
         return obj.note_text[:50] + '...' if len(obj.note_text) > 50 else obj.note_text
@@ -201,8 +228,17 @@ class ReadingNoteAdmin(admin.ModelAdmin):
 
 @admin.register(Highlight)
 class HighlightAdmin(admin.ModelAdmin):
-    list_display = ('highlight_id', 'user', 'book', 'book_content', 'color', 'created_at', 'updated_at')
+    list_display = ('highlight_id', 'user', 'book', 'color', 'created_at', 'updated_at')
     list_filter = ('color', 'created_at', 'updated_at')
-    search_fields = ('highlighted_text', 'user__user_name', 'book__title')
+    search_fields = ('highlighted_text', 'user__username', 'book__title')
     readonly_fields = ('highlight_id', 'created_at', 'updated_at')
-    raw_id_fields = ('user', 'book', 'book_content')
+    raw_id_fields = ('user', 'book')
+
+
+@admin.register(ShareLink)
+class ShareLinkAdmin(admin.ModelAdmin):
+    list_display = ('share_token', 'content_type', 'content_id', 'created_by', 'is_active', 'created_at')
+    list_filter = ('content_type', 'is_active', 'created_at')
+    search_fields = ('share_token', 'created_by__user_name', 'created_by__email')
+    readonly_fields = ('created_at',)
+    raw_id_fields = ('created_by',)

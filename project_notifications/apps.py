@@ -6,5 +6,6 @@ class ProjectNotificationsConfig(AppConfig):
     name = 'project_notifications'
     
     def ready(self):
-        """Import signals when app is ready."""
-        import project_notifications.signals.notification_signals  # noqa
+        """Import signal handlers when app is ready."""
+        import project_notifications.signals.notification_signals
+

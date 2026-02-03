@@ -1,6 +1,8 @@
 from django.db import models
+from django.core.validators import MinValueValidator, MaxValueValidator
 import uuid
 from .user import User
+from .book_reading import Chapters
 
 
 class Post(models.Model):
@@ -34,9 +36,6 @@ class Verse(models.Model):
 class PrayerRequest(models.Model):
     prayer_request_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="prayer_requests")
-    name = models.CharField(max_length=255, default="Anonymous")
-    email = models.EmailField(default="anonymous@example.com")
-    phone_number = models.CharField(max_length=20, null=True, blank=True)
     description = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -46,6 +45,23 @@ class PrayerRequest(models.Model):
 
     def __str__(self):
         return f"Prayer Request {self.prayer_request_id} by {self.user}"
+
+
+class Testimonial(models.Model):
+    testimonial_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="testimonials")
+    description = models.TextField()
+    rating = models.IntegerField(validators=[MinValueValidator(1), MaxValueValidator(5)])
+    is_verified = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'bible_way_testimonial'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Testimonial {self.testimonial_id} by {self.user} - Rating: {self.rating}"
 
 
 class Media(models.Model):
@@ -61,6 +77,20 @@ class Media(models.Model):
     media_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     post = models.ForeignKey(
         Post,
+        on_delete=models.CASCADE,
+        related_name="media",
+        null=True,
+        blank=True,
+    )
+    prayer_request = models.ForeignKey(
+        PrayerRequest,
+        on_delete=models.CASCADE,
+        related_name="media",
+        null=True,
+        blank=True,
+    )
+    testimonial = models.ForeignKey(
+        Testimonial,
         on_delete=models.CASCADE,
         related_name="media",
         null=True,
@@ -119,6 +149,7 @@ class Reaction(models.Model):
     )
     prayer_request = models.ForeignKey(PrayerRequest, on_delete=models.CASCADE, related_name="reactions", null=True, blank=True)
     verse = models.ForeignKey(Verse, on_delete=models.CASCADE, related_name="reactions", null=True, blank=True)
+    chapter = models.ForeignKey(Chapters, on_delete=models.CASCADE, related_name="reactions", null=True, blank=True)
     reaction_type = models.CharField(max_length=20, choices=REACTION_TYPES)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -152,14 +183,9 @@ class Promotion(models.Model):
     promotion_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True)
-    price = models.DecimalField(max_digits=10, decimal_places=2)
+    price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     redirect_link = models.URLField()
     meta_data = models.JSONField(blank=True, null=True)
-    media = models.ForeignKey(
-        Media,
-        on_delete=models.CASCADE,
-        related_name="promotions",
-    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -188,6 +214,75 @@ class PromotionImage(models.Model):
 
     def __str__(self):
         return f"PromotionImage {self.promotion_image_id} for {self.promotion.title}"
+
+
+class ShareLinkContentTypeChoices(models.TextChoices):
+    POST = 'POST', 'Post'
+    PROFILE = 'PROFILE', 'Profile'
+
+
+class ShareLink(models.Model):
+    share_token = models.CharField(max_length=20, unique=True, db_index=True)
+    content_type = models.CharField(max_length=10, choices=ShareLinkContentTypeChoices.choices)
+    content_id = models.UUIDField()
+    created_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name="share_links_created")
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'bible_way_share_link'
+        indexes = [
+            models.Index(fields=['share_token']),
+            models.Index(fields=['content_type', 'content_id']),
+        ]
+
+    def __str__(self):
+        return f"ShareLink {self.share_token} - {self.get_content_type_display()}"
+
+
+class Wallpaper(models.Model):
+    wallpaper_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    image_url = models.URLField()
+    filename = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'bible_way_wallpaper'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Wallpaper {self.wallpaper_id} - {self.filename}"
+
+
+class Sticker(models.Model):
+    sticker_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    image_url = models.URLField()
+    filename = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'bible_way_sticker'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Sticker {self.sticker_id} - {self.filename}"
+
+
+class ChapterFeedback(models.Model):
+    feedback_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="chapter_feedbacks")
+    chapter = models.ForeignKey(Chapters, on_delete=models.CASCADE, related_name="feedbacks")
+    description = models.TextField()
+    rating = models.IntegerField(validators=[MinValueValidator(1), MaxValueValidator(5)])
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'bible_way_chapter_feedback'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Feedback {self.feedback_id} by {self.user} on {self.chapter} - Rating: {self.rating}"
 
 
 

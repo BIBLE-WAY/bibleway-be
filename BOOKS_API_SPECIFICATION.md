@@ -92,7 +92,67 @@ Authorization: Bearer <access_token>
 
 ---
 
-### 1.2 Get All Categories
+### 1.2 Admin Get All Categories
+**Endpoint:** `GET /admin/categories`  
+**Authentication:** Required (JWT)  
+**Permission:** Admin only (`is_staff=True`)
+
+**Description:**
+This endpoint allows admins to retrieve all categories. Returns all categories regardless of their status, ordered by `display_order` and then by `category_name`.
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Categories retrieved successfully",
+  "data": [
+    {
+      "category_id": "uuid-string",
+      "category_name": "SEGREGATE_BIBLES",
+      "display_name": "Segregated Bibles",
+      "cover_image_url": "https://s3.amazonaws.com/bucket/categories/cover_images/...",
+      "description": "Bibles with age-specific content",
+      "display_order": 0,
+      "created_at": "2024-01-15T10:30:00Z",
+      "updated_at": "2024-01-15T10:30:00Z"
+    },
+    {
+      "category_id": "uuid-string",
+      "category_name": "NORMAL_BIBLES",
+      "display_name": "Normal Bibles",
+      "cover_image_url": "https://s3.amazonaws.com/bucket/categories/cover_images/...",
+      "description": "Bibles with same content for all age groups",
+      "display_order": 1,
+      "created_at": "2024-01-15T10:30:00Z",
+      "updated_at": "2024-01-15T10:30:00Z"
+    }
+  ]
+}
+```
+
+**Error Responses:**
+
+- **403 Forbidden** - Not admin:
+```json
+{
+  "detail": "You do not have permission to perform this action."
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to retrieve categories: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Note:** Categories are ordered by `display_order` and then by `category_name`. This endpoint returns all categories, including those that may not be active.
+
+---
+
+### 1.3 Get All Categories
 **Endpoint:** `GET /books/categories/`  
 **Authentication:** Required (JWT)
 
@@ -227,7 +287,67 @@ Authorization: Bearer <access_token>
 
 ---
 
-### 2.2 Get All Age Groups
+### 2.2 Admin Get All Age Groups
+**Endpoint:** `GET /admin/age-groups`  
+**Authentication:** Required (JWT)  
+**Permission:** Admin only (`is_staff=True`)
+
+**Description:**
+This endpoint allows admins to retrieve all age groups. Returns all age groups regardless of their status, ordered by `display_order` and then by `age_group_name`.
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Age groups retrieved successfully",
+  "data": [
+    {
+      "age_group_id": "uuid-string",
+      "age_group_name": "CHILD",
+      "display_name": "Child",
+      "cover_image_url": "https://s3.amazonaws.com/bucket/age_groups/cover_images/...",
+      "description": "Books for children",
+      "display_order": 0,
+      "created_at": "2024-01-15T10:30:00Z",
+      "updated_at": "2024-01-15T10:30:00Z"
+    },
+    {
+      "age_group_id": "uuid-string",
+      "age_group_name": "TEEN",
+      "display_name": "Teen",
+      "cover_image_url": "https://s3.amazonaws.com/bucket/age_groups/cover_images/...",
+      "description": "Books for teenagers",
+      "display_order": 1,
+      "created_at": "2024-01-15T10:30:00Z",
+      "updated_at": "2024-01-15T10:30:00Z"
+    }
+  ]
+}
+```
+
+**Error Responses:**
+
+- **403 Forbidden** - Not admin:
+```json
+{
+  "detail": "You do not have permission to perform this action."
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to retrieve age groups: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Note:** Age groups are ordered by `display_order` and then by `age_group_name`. This endpoint returns all age groups, including those that may not be active.
+
+---
+
+### 2.3 Get All Age Groups
 **Endpoint:** `GET /books/age-groups/`  
 **Authentication:** Required (JWT)
 
@@ -283,41 +403,83 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 3. Book APIs
+## 3. Language APIs
 
-### 3.1 Admin Create Book
+### 3.1 Admin Get All Languages
+**Endpoint:** `GET /admin/languages`  
+**Authentication:** Required (JWT)  
+**Permission:** Admin only (`is_staff=True`)
+
+**Description:**
+This endpoint allows admins to retrieve all available languages. Languages are used to categorize books by their language.
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Languages retrieved successfully",
+  "data": [
+    {
+      "language_id": "uuid-string",
+      "language_name": "EN",
+      "display_name": "English"
+    },
+    {
+      "language_id": "uuid-string",
+      "language_name": "ES",
+      "display_name": "Spanish"
+    },
+    {
+      "language_id": "uuid-string",
+      "language_name": "FR",
+      "display_name": "French"
+    }
+  ]
+}
+```
+
+**Error Responses:**
+
+- **403 Forbidden** - Not admin:
+```json
+{
+  "detail": "You do not have permission to perform this action."
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to retrieve languages: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Note:** Languages are typically predefined in the system. This endpoint returns all available languages that can be used when creating books.
+
+---
+
+## 4. Book APIs
+
+### 4.1 Admin Create Book
 **Endpoint:** `POST /admin/book/create`  
 **Authentication:** Required (JWT)  
 **Permission:** Admin only (`is_staff=True`)  
 **Content-Type:** `multipart/form-data`
 
 **Description:**
-This endpoint allows admins to create a book by uploading a markdown file. The system automatically:
-- Detects the book title from the markdown file (if not provided)
-- Parses chapters from the markdown file using multiple pattern detection
-- Extracts chapter numbers, titles, and content
-- Uploads the markdown file and cover image to S3
-- Creates book and chapter records in the database
+This endpoint allows admins to create a book by uploading a source file (markdown file). The system uploads the source file and cover image to S3 and creates a book record in the database.
 
 **Request Body (Form Data):**
-- `markdown_file` (file, required) - Markdown file (.md) containing the book content
-- `category_id` (string, required) - UUID of the category
-- `age_group_id` (string, required) - UUID of the age group
-- `language_id` (string, required) - UUID of the language
-- `title` (string, optional) - Book title (if not provided, will be auto-detected from markdown)
+- `title` (string, required) - Book title
+- `category` (string, required) - UUID of the category
+- `age_group` (string, required) - UUID of the age group
+- `language` (string, required) - UUID of the language
+- `source_file` (file, required) - Source file (.md markdown file) containing the book content
 - `cover_image` (file, optional) - Cover image file for the book
 - `description` (string, optional) - Description of the book
-- `author` (string, optional) - Author of the book
 - `book_order` (integer, optional, default: 0) - Order for displaying books
-- `metadata` (string, optional) - JSON string for additional metadata
-
-**Markdown File Format:**
-The parser supports multiple markdown formats and automatically detects:
-- Bible format: `__[Chapter Name]__ {verse:number} content...`
-- Standard headings: `# Chapter 1` or `## Chapter 1`
-- Numbered headings: `## 1. Chapter Title`
-- Bracketed format: `[Chapter 1]` or `[1] Chapter Title`
-- Generic numbered lists
 
 **Success Response (201 Created):**
 ```json
@@ -326,31 +488,9 @@ The parser supports multiple markdown formats and automatically detects:
   "message": "Book created successfully",
   "data": {
     "book_id": "uuid-string",
-    "title": "The Book of Genesis",
-    "description": "First book of the Bible",
-    "category_id": "uuid-string",
-    "category_name": "NORMAL_BIBLES",
-    "age_group_id": "uuid-string",
-    "age_group_name": "ALL",
-    "language_id": "uuid-string",
-    "language_name": "EN",
-    "cover_image_url": "https://s3.amazonaws.com/bucket/books/cover_images/...",
-    "author": "Moses",
-    "book_order": 1,
-    "total_chapters": 50,
-    "is_parsed": true,
-    "is_active": true,
-    "source_file_name": "genesis.md",
-    "source_file_url": "https://s3.amazonaws.com/bucket/books/markdown/...",
-    "metadata": {},
+    "source_file_url": "https://s3.amazonaws.com/bucket/books/{book_id_preview}/source_files/...",
     "created_at": "2024-01-15T10:30:00Z",
-    "updated_at": "2024-01-15T10:30:00Z",
-    "parsing_info": {
-      "detected_title": "The Book of Genesis",
-      "detected_pattern": "BIBLE_FORMAT",
-      "total_chapters": 50,
-      "parsing_method": "auto_detection"
-    }
+    "updated_at": "2024-01-15T10:30:00Z"
   }
 }
 ```
@@ -368,17 +508,124 @@ The parser supports multiple markdown formats and automatically detects:
 ```json
 {
   "success": false,
-  "error": "Markdown file is required",
+  "error": "Title is required",
   "error_code": "VALIDATION_ERROR"
 }
 ```
 
-- **400 Bad Request** - Invalid file type:
+- **400 Bad Request** - Source file required:
 ```json
 {
   "success": false,
-  "error": "File must be a .md (markdown) file",
+  "error": "Source file (.md file) is required",
   "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Category not found:
+```json
+{
+  "success": false,
+  "error": "Category with id '<category_id>' does not exist",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Age group not found:
+```json
+{
+  "success": false,
+  "error": "Age group with id '<age_group_id>' does not exist",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Language not found:
+```json
+{
+  "success": false,
+  "error": "Language with id '<language_id>' does not exist",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **500 Internal Server Error** - S3 upload error:
+```json
+{
+  "success": false,
+  "error": "Failed to upload source file: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+- **500 Internal Server Error** - Cover image upload error:
+```json
+{
+  "success": false,
+  "error": "Failed to upload cover image: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+- **500 Internal Server Error** - Book creation error:
+```json
+{
+  "success": false,
+  "error": "Failed to create book: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Notes:**
+- Source file and cover image are uploaded to S3
+- Source files are stored in: `books/{book_id_preview}/source_files/`
+- Cover images are stored in: `books/{book_id_preview}/cover_images/`
+- The `book_id_preview` is a randomly generated hex string used for S3 folder structure
+- The `book_order` parameter is automatically converted to an integer (defaults to 0 if invalid)
+- After creation, you can update book metadata using the update metadata endpoint
+- The `source_file_name` field is automatically extracted from the uploaded file and stored in the database
+
+---
+
+### 4.2 Get Books by Category and Age Group
+**Endpoint:** `GET /books/category/<category_id>/age-group/<age_group_id>/books/`  
+**Authentication:** Required (JWT)
+
+**Path Parameters:**
+- `category_id` (string, required) - UUID of the category
+- `age_group_id` (string, required) - UUID of the age group
+
+**Query Parameters:**
+- `language_id` (string, optional) - UUID of the language (filters books by language)
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Books retrieved successfully",
+  "data": [
+    {
+      "book_id": "uuid-string",
+      "title": "The Book of Genesis",
+      "cover_image_url": "https://s3.amazonaws.com/bucket/books/cover_images/...",
+      "book_order": 1
+    },
+    {
+      "book_id": "uuid-string",
+      "title": "The Book of Exodus",
+      "cover_image_url": "https://s3.amazonaws.com/bucket/books/cover_images/...",
+      "book_order": 2
+    }
+  ]
+}
+```
+
+**Error Responses:**
+
+- **401 Unauthorized** - Missing or invalid token:
+```json
+{
+  "detail": "Authentication credentials were not provided."
 }
 ```
 
@@ -409,124 +656,6 @@ The parser supports multiple markdown formats and automatically detects:
 }
 ```
 
-- **400 Bad Request** - No chapters detected:
-```json
-{
-  "success": false,
-  "error": "No chapters detected in markdown file. Please ensure the file contains chapter markers.",
-  "error_code": "VALIDATION_ERROR"
-}
-```
-
-- **400 Bad Request** - Invalid metadata JSON:
-```json
-{
-  "success": false,
-  "error": "Invalid JSON format for metadata",
-  "error_code": "VALIDATION_ERROR"
-}
-```
-
-- **500 Internal Server Error** - S3 upload error:
-```json
-{
-  "success": false,
-  "error": "Failed to upload markdown file to S3: <error_message>",
-  "error_code": "INTERNAL_ERROR"
-}
-```
-
-- **500 Internal Server Error** - Parsing error:
-```json
-{
-  "success": false,
-  "error": "Failed to parse markdown file: <error_message>",
-  "error_code": "INTERNAL_ERROR"
-}
-```
-
-**Notes:**
-- The markdown parser automatically detects book title and chapter patterns
-- Chapters are extracted and stored as separate `BookContent` records
-- The book's `is_parsed` flag is set to `true` after successful parsing
-- `total_chapters` is automatically calculated and stored
-- Markdown file and cover image are stored in separate S3 folders
-
----
-
-### 3.2 Get Books by Category and Age Group
-**Endpoint:** `GET /books/category/<category_id>/age-group/<age_group_id>/books/`  
-**Authentication:** Required (JWT)
-
-**Path Parameters:**
-- `category_id` (string, required) - UUID of the category
-- `age_group_id` (string, required) - UUID of the age group
-
-**Query Parameters:**
-- `language_id` (string, optional) - UUID of the language (filters books by language)
-
-**Success Response (200 OK):**
-```json
-{
-  "success": true,
-  "message": "Books retrieved successfully",
-  "data": [
-    {
-      "book_id": "uuid-string",
-      "title": "The Book of Genesis",
-      "cover_image_url": "https://s3.amazonaws.com/bucket/books/cover_images/...",
-      "book_order": 1,
-      "total_chapters": 50,
-      "is_active": true
-    },
-    {
-      "book_id": "uuid-string",
-      "title": "The Book of Exodus",
-      "cover_image_url": "https://s3.amazonaws.com/bucket/books/cover_images/...",
-      "book_order": 2,
-      "total_chapters": 40,
-      "is_active": true
-    }
-  ]
-}
-```
-
-**Error Responses:**
-
-- **401 Unauthorized** - Missing or invalid token:
-```json
-{
-  "detail": "Authentication credentials were not provided."
-}
-```
-
-- **400 Bad Request** - Category not found:
-```json
-{
-  "success": false,
-  "error": "Category not found",
-  "error_code": "CATEGORY_NOT_FOUND"
-}
-```
-
-- **400 Bad Request** - Age group not found:
-```json
-{
-  "success": false,
-  "error": "Age group not found",
-  "error_code": "AGE_GROUP_NOT_FOUND"
-}
-```
-
-- **400 Bad Request** - Language not found:
-```json
-{
-  "success": false,
-  "error": "Language not found",
-  "error_code": "LANGUAGE_NOT_FOUND"
-}
-```
-
 - **500 Internal Server Error:**
 ```json
 {
@@ -541,23 +670,118 @@ The parser supports multiple markdown formats and automatically detects:
 - Books are ordered by `book_order` and then by `title`
 - If `language_id` is provided, only books in that language are returned
 - Response does not include pagination
+- Response includes minimal book information (book_id, title, cover_image_url, book_order)
 
 ---
 
-### 3.3 Get Book Details
-**Endpoint:** `GET /books/<book_id>/`  
-**Authentication:** Required (JWT)
+### 4.3 Admin Update Book Metadata
+**Endpoint:** `POST /admin/book/update-metadata`  
+**Authentication:** Required (JWT)  
+**Permission:** Admin only (`is_staff=True`)
 
-**Path Parameters:**
-- `book_id` (string, required) - UUID of the book
+**Description:**
+This endpoint allows admins to update the metadata field of an existing book. The metadata field is a JSON object that can store additional information about the book.
+
+**Request Body:**
+```json
+{
+  "book_id": "uuid-string (required)",
+  "metadata": {
+    "key1": "value1",
+    "key2": "value2"
+  }
+}
+```
 
 **Success Response (200 OK):**
 ```json
 {
   "success": true,
-  "message": "Book details retrieved successfully",
-  "data": {
-    "book": {
+  "message": "Book metadata updated successfully"
+}
+```
+
+**Error Responses:**
+
+- **403 Forbidden** - Not admin:
+```json
+{
+  "detail": "You do not have permission to perform this action."
+}
+```
+
+- **400 Bad Request** - Book ID required:
+```json
+{
+  "success": false,
+  "error": "Book ID is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Metadata required:
+```json
+{
+  "success": false,
+  "error": "Metadata is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Invalid metadata format:
+```json
+{
+  "success": false,
+  "error": "Metadata must be a valid JSON object",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Book not found:
+```json
+{
+  "success": false,
+  "error": "Book with id '<book_id>' does not exist",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to update book metadata: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Notes:**
+- The `metadata` field must be a valid JSON object (dictionary)
+- The metadata is stored as a JSON field in the database
+- This endpoint only updates the metadata field; other book fields are not modified
+- Use this endpoint to store additional structured information about the book
+
+---
+
+### 4.4 Admin Get All Books
+**Endpoint:** `GET /admin/books`  
+**Authentication:** Required (JWT)  
+**Permission:** Admin only (`is_staff=True`)
+
+**Description:**
+This endpoint allows admins to retrieve all books with complete details. Returns all books regardless of their active status, ordered by creation date (newest first). Includes full book information with related category, age group, and language details.
+
+**Query Parameters:**
+- `limit` (integer, optional, max: 100) - Number of books to return. If not provided or invalid, returns all books
+- `offset` (integer, optional, default: 0) - Number of books to skip for pagination
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Books retrieved successfully",
+  "data": [
+    {
       "book_id": "uuid-string",
       "title": "The Book of Genesis",
       "description": "First book of the Bible",
@@ -571,45 +795,150 @@ The parser supports multiple markdown formats and automatically detects:
       "language_name": "EN",
       "language_display_name": "English",
       "cover_image_url": "https://s3.amazonaws.com/bucket/books/cover_images/...",
-      "author": "Moses",
       "book_order": 1,
-      "total_chapters": 50,
-      "is_parsed": true,
       "is_active": true,
-      "source_file_name": "genesis.md",
-      "source_file_url": "https://s3.amazonaws.com/bucket/books/markdown/...",
+      "source_file_url": "https://s3.amazonaws.com/bucket/books/source_files/...",
       "metadata": {},
       "created_at": "2024-01-15T10:30:00Z",
       "updated_at": "2024-01-15T10:30:00Z"
-    },
-    "chapters": [
-      {
-        "book_content_id": "uuid-string",
-        "chapter_number": 1,
-        "chapter_title": "Genesis 1",
-        "content_order": 1,
-        "created_at": "2024-01-15T10:30:00Z",
-        "updated_at": "2024-01-15T10:30:00Z"
-      },
-      {
-        "book_content_id": "uuid-string",
-        "chapter_number": 2,
-        "chapter_title": "Genesis 2",
-        "content_order": 2,
-        "created_at": "2024-01-15T10:30:00Z",
-        "updated_at": "2024-01-15T10:30:00Z"
-      }
-    ]
+    }
+  ],
+  "total_count": 50,
+  "pagination": {
+    "limit": 20,
+    "offset": 0,
+    "has_next": true,
+    "has_previous": false
   }
+}
+```
+
+**Response Fields:**
+- `book_id` (string) - Unique book identifier
+- `title` (string) - Book title
+- `description` (string) - Book description (empty string if not set)
+- `category_id` (string) - UUID of the category
+- `category_name` (string) - Category name (e.g., "NORMAL_BIBLES", "SEGREGATE_BIBLES")
+- `category_display_name` (string) - Human-readable category name (e.g., "Normal Bibles")
+- `age_group_id` (string) - UUID of the age group
+- `age_group_name` (string) - Age group name (e.g., "ALL", "CHILD", "TEEN", "ADULT", "SENIOR")
+- `age_group_display_name` (string) - Human-readable age group name (e.g., "All", "Child")
+- `language_id` (string) - UUID of the language
+- `language_name` (string) - Language code (e.g., "EN", "ES", "FR")
+- `language_display_name` (string) - Human-readable language name (e.g., "English", "Spanish")
+- `cover_image_url` (string) - URL to book cover image (empty string if not set)
+- `book_order` (integer) - Display order for the book
+- `is_active` (boolean) - Whether the book is active
+- `source_file_url` (string) - URL to the source file (empty string if not set)
+- `metadata` (object) - Additional metadata as JSON object (empty object if not set)
+- `created_at` (string) - Creation timestamp in ISO 8601 format
+- `updated_at` (string) - Last update timestamp in ISO 8601 format
+- `total_count` (integer) - Total number of books available
+- `pagination` (object, optional) - Pagination information (only included if `limit` is provided)
+  - `limit` (integer) - Number of books per page
+  - `offset` (integer) - Current offset
+  - `has_next` (boolean) - Whether there are more books after the current page
+  - `has_previous` (boolean) - Whether there are books before the current page
+
+**Error Responses:**
+- **403 Forbidden** - Not admin:
+```json
+{
+  "detail": "You do not have permission to perform this action."
+}
+```
+
+- **400 Bad Request** - Invalid limit:
+```json
+{
+  "success": false,
+  "error": "Limit must be greater than 0",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Invalid offset:
+```json
+{
+  "success": false,
+  "error": "Offset must be greater than or equal to 0",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to retrieve books: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Notes:**
+- Books are ordered by creation date (newest first) by default
+- Returns all books including inactive ones (for admin management purposes)
+- If `limit` is not provided, all books are returned
+- Maximum `limit` is 100; values greater than 100 are automatically capped at 100
+- Pagination information is only included in the response if `limit` is provided
+- All related objects (category, age_group, language) are included in the response
+- This endpoint is optimized with `select_related()` to avoid N+1 query issues
+
+---
+
+## 5. Highlight APIs
+
+### 5.1 Create Highlight
+**Endpoint:** `POST /highlight/create`  
+**Authentication:** Required (JWT)
+
+**Description:**
+This endpoint allows users to create a highlight for a specific book. Highlights are used to mark specific text ranges in books.
+
+**Request Body:**
+```json
+{
+  "book_id": "uuid-string (required)",
+  "block_id": "uuid-string (optional)",
+  "start_offset": "string (required)",
+  "end_offset": "string (required)",
+  "color": "string (optional, default: 'yellow')"
+}
+```
+
+**Request Fields:**
+- `book_id` (string, required) - UUID of the book
+- `block_id` (string, optional) - UUID of the block/chapter section
+- `start_offset` (string, required) - Starting position offset of the highlighted text
+- `end_offset` (string, required) - Ending position offset of the highlighted text
+- `color` (string, optional) - Color of the highlight (default: 'yellow')
+
+**Success Response (201 Created):**
+```json
+{
+  "success": true,
+  "message": "Highlight created successfully",
+  "highlight_id": "uuid-string"
 }
 ```
 
 **Error Responses:**
 
-- **401 Unauthorized** - Missing or invalid token:
+- **400 Bad Request** - Validation error:
 ```json
 {
-  "detail": "Authentication credentials were not provided."
+  "success": false,
+  "error": "book_id is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Missing required field:
+```json
+{
+  "success": false,
+  "error": "start_offset is required",
+  "error_code": "VALIDATION_ERROR"
 }
 ```
 
@@ -626,17 +955,175 @@ The parser supports multiple markdown formats and automatically detects:
 ```json
 {
   "success": false,
-  "error": "Failed to retrieve book details: <error_message>",
+  "error": "Failed to create highlight: <error_message>",
   "error_code": "INTERNAL_ERROR"
 }
 ```
 
 **Notes:**
-- Only active books are returned (inactive books return 404)
-- Chapters list includes metadata only (no full content)
-- Chapters are ordered by `content_order` and then by `chapter_number`
-- Use `book_content_id` from chapters to fetch individual chapter content (separate endpoint)
-- Related objects (category, age_group, language) are included with display names
+- The `user_id` is automatically extracted from the authenticated user's JWT token
+- The `block_id` is optional and can be used to associate the highlight with a specific section
+- The `color` field defaults to 'yellow' if not provided
+- Highlights are ordered by creation date (newest first)
+
+---
+
+### 5.2 Get Highlights by Book
+**Endpoint:** `GET /highlight/book/<book_id>`  
+**Authentication:** Required (JWT)
+
+**Description:**
+This endpoint retrieves all highlights for a specific book. If `user_id` is provided as a query parameter, it returns highlights for that user. Otherwise, it returns highlights for the authenticated user.
+
+**Path Parameters:**
+- `book_id` (string, required) - UUID of the book
+
+**Query Parameters:**
+- `user_id` (string, optional) - UUID of the user. If not provided, uses the authenticated user's ID
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Highlights retrieved successfully",
+  "data": [
+    {
+      "highlight_id": "uuid-string",
+      "book_id": "uuid-string",
+      "block_id": "uuid-string",
+      "start_offset": "string",
+      "end_offset": "string",
+      "color": "yellow",
+      "created_at": "2024-01-15T10:30:00Z",
+      "updated_at": "2024-01-15T10:30:00Z"
+    },
+    {
+      "highlight_id": "uuid-string",
+      "book_id": "uuid-string",
+      "block_id": null,
+      "start_offset": "string",
+      "end_offset": "string",
+      "color": "blue",
+      "created_at": "2024-01-14T09:20:00Z",
+      "updated_at": "2024-01-14T09:20:00Z"
+    }
+  ]
+}
+```
+
+**Response Fields:**
+- `highlight_id` (string) - Unique highlight identifier
+- `book_id` (string) - UUID of the book
+- `block_id` (string or null) - UUID of the block/chapter section (null if not set)
+- `start_offset` (string) - Starting position offset
+- `end_offset` (string) - Ending position offset
+- `color` (string) - Color of the highlight
+- `created_at` (string) - Creation timestamp in ISO 8601 format
+- `updated_at` (string) - Last update timestamp in ISO 8601 format
+
+**Error Responses:**
+
+- **400 Bad Request** - Validation error:
+```json
+{
+  "success": false,
+  "error": "book_id is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **404 Not Found** - Book not found:
+```json
+{
+  "success": false,
+  "error": "Book not found",
+  "error_code": "BOOK_NOT_FOUND"
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to retrieve highlights: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Notes:**
+- Highlights are ordered by creation date (newest first)
+- If `user_id` query parameter is not provided, the endpoint uses the authenticated user's ID
+- Returns an empty array if no highlights are found for the specified book and user
+
+---
+
+### 5.3 Delete Highlight
+**Endpoint:** `DELETE /highlight/delete`  
+**Authentication:** Required (JWT)
+
+**Description:**
+This endpoint allows users to delete their own highlights. Only the owner of the highlight can delete it.
+
+**Request Body:**
+```json
+{
+  "highlight_id": "uuid-string (required)"
+}
+```
+
+**Request Fields:**
+- `highlight_id` (string, required) - UUID of the highlight to delete
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Highlight deleted successfully"
+}
+```
+
+**Error Responses:**
+
+- **400 Bad Request** - Validation error:
+```json
+{
+  "success": false,
+  "error": "highlight_id is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **404 Not Found** - Highlight not found:
+```json
+{
+  "success": false,
+  "error": "Highlight not found",
+  "error_code": "HIGHLIGHT_NOT_FOUND"
+}
+```
+
+- **403 Forbidden** - Unauthorized:
+```json
+{
+  "success": false,
+  "error": "You are not authorized to delete this highlight",
+  "error_code": "UNAUTHORIZED"
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to delete highlight: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Notes:**
+- The `user_id` is automatically extracted from the authenticated user's JWT token
+- Only the owner of the highlight can delete it
+- The endpoint checks ownership before allowing deletion
 
 ---
 
@@ -649,6 +1136,8 @@ The parser supports multiple markdown formats and automatically detects:
 | `AGE_GROUP_NOT_FOUND` | Age group does not exist |
 | `LANGUAGE_NOT_FOUND` | Language does not exist |
 | `BOOK_NOT_FOUND` | Book does not exist |
+| `HIGHLIGHT_NOT_FOUND` | Highlight does not exist |
+| `UNAUTHORIZED` | User is not authorized to perform this action |
 | `S3_UPLOAD_ERROR` | Failed to upload file to S3 storage |
 | `INTERNAL_ERROR` | Internal server error |
 
@@ -662,15 +1151,10 @@ The parser supports multiple markdown formats and automatically detects:
    ```
 
 2. **File Uploads:** 
-   - Cover images and markdown files are uploaded to S3
-   - Cover images are stored in: `categories/cover_images/`, `age_groups/cover_images/`, `books/cover_images/`
-   - Markdown files are stored in: `books/markdown/{book_id}/`
-
-3. **Markdown Parsing:**
-   - The parser automatically detects book titles and chapter patterns
-   - Supports multiple markdown formats (Bible format, standard headings, numbered headings, etc.)
-   - Chapters are extracted and stored as separate database records
-   - Book's `is_parsed` flag indicates successful parsing
+   - Cover images and source files are uploaded to S3
+   - Cover images are stored in: `categories/cover_images/`, `age_groups/cover_images/`, `books/{book_id_preview}/cover_images/`
+   - Source files are stored in: `books/{book_id_preview}/source_files/`
+   - The `book_id_preview` is a randomly generated hex string used for organizing files in S3
 
 4. **Category Types:**
    - `SEGREGATE_BIBLES`: Different content for different age groups (child, teen, adult, senior)
@@ -689,5 +1173,9 @@ The parser supports multiple markdown formats and automatically detects:
 
 8. **Error Responses:** All error responses follow a consistent format with `success: false`, `error` message, and `error_code`.
 
-9. **Chapter Content:** The book details endpoint returns chapter metadata only. Use a separate endpoint (to be implemented) to fetch full chapter content by `book_content_id`.
+9. **Chapter Content:** Use a separate endpoint (to be implemented) to fetch full chapter content by `book_content_id`.
+
+10. **Book Creation:** When creating a book, only the basic book record is created. The source file is uploaded to S3, but parsing and chapter extraction are handled separately (if needed).
+
+11. **Metadata Field:** The book metadata field is a JSON object that can store additional structured information. Use the Update Book Metadata endpoint to modify this field.
 

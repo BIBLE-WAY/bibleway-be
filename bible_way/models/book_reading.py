@@ -6,47 +6,45 @@ from .user import User
 
 class LanguageChoices(models.TextChoices):
     ENGLISH = 'EN', 'English'
-    SPANISH = 'ES', 'Spanish'
-    FRENCH = 'FR', 'French'
     GERMAN = 'DE', 'German'
+    FRENCH = 'FR', 'French'
+    SPANISH = 'ES', 'Spanish'
     ITALIAN = 'IT', 'Italian'
     PORTUGUESE = 'PT', 'Portuguese'
     RUSSIAN = 'RU', 'Russian'
-    CHINESE_SIMPLIFIED = 'ZH_CN', 'Chinese (Simplified)'
-    CHINESE_TRADITIONAL = 'ZH_TW', 'Chinese (Traditional)'
-    JAPANESE = 'JA', 'Japanese'
-    KOREAN = 'KO', 'Korean'
-    ARABIC = 'AR', 'Arabic'
-    HINDI = 'HI', 'Hindi'
-    BENGALI = 'BN', 'Bengali'
-    URDU = 'UR', 'Urdu'
-    TURKISH = 'TR', 'Turkish'
-    POLISH = 'PL', 'Polish'
     DUTCH = 'NL', 'Dutch'
-    GREEK = 'EL', 'Greek'
-    HEBREW = 'HE', 'Hebrew'
     SWEDISH = 'SV', 'Swedish'
-    NORWEGIAN = 'NO', 'Norwegian'
-    DANISH = 'DA', 'Danish'
-    FINNISH = 'FI', 'Finnish'
-    CZECH = 'CS', 'Czech'
-    ROMANIAN = 'RO', 'Romanian'
-    HUNGARIAN = 'HU', 'Hungarian'
-    THAI = 'TH', 'Thai'
-    VIETNAMESE = 'VI', 'Vietnamese'
-    INDONESIAN = 'ID', 'Indonesian'
-    MALAY = 'MS', 'Malay'
-    TAGALOG = 'TL', 'Tagalog'
-    SWAHILI = 'SW', 'Swahili'
-    AMHARIC = 'AM', 'Amharic'
-    YORUBA = 'YO', 'Yoruba'
-    ZULU = 'ZU', 'Zulu'
-    PERSIAN = 'FA', 'Persian'
-    UKRAINIAN = 'UK', 'Ukrainian'
+    POLISH = 'PL', 'Polish'
+    GREEK = 'EL', 'Greek'
+    ASSAMESE = 'AS', 'Assamese'
+    BENGALI = 'BN', 'Bengali'
+    BODO = 'BRX', 'Bodo'
+    HINDI = 'HI', 'Hindi'
+    GUJARATI = 'GU', 'Gujarati'
+    KANNADA = 'KN', 'Kannada'
+    KASHMIRI = 'KS', 'Kashmiri'
+    KONKANI = 'KOK', 'Konkani'
+    MAITHILI = 'MAI', 'Maithili'
+    MALAYALAM = 'ML', 'Malayalam'
+    MANIPURI = 'MNI', 'Manipuri'
+    MARATHI = 'MR', 'Marathi'
+    NEPALI = 'NE', 'Nepali'
+    ODIA = 'OR', 'Odia'
+    PUNJABI = 'PA', 'Punjabi'
+    SANSKRIT = 'SA', 'Sanskrit'
+    SANTALI = 'SAT', 'Santali'
+    SINDHI = 'SD', 'Sindhi'
     TAMIL = 'TA', 'Tamil'
     TELUGU = 'TE', 'Telugu'
-    MARATHI = 'MR', 'Marathi'
-    GUJARATI = 'GU', 'Gujarati'
+    URDU = 'UR', 'Urdu'
+    DOGRI = 'DOG', 'Dogri'
+    SWAHILI = 'SW', 'Swahili'
+    AFRIKAANS = 'AF', 'Afrikaans'
+    HAUSA = 'HA', 'Hausa'
+    ZULU = 'ZU', 'Zulu'
+    YORUBA = 'YO', 'Yoruba'
+    CHINESE_SIMPLIFIED = 'ZH_CN', 'Chinese (Simplified)'
+    ARABIC = 'AR', 'Arabic'
 
 
 class CategoryChoices(models.TextChoices):
@@ -89,7 +87,7 @@ class Category(models.Model):
 class Language(models.Model):
     language_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
     language_name = models.CharField(
-        max_length=6,
+        max_length=10,
         choices=LanguageChoices.choices,
         default=LanguageChoices.ENGLISH
     )
@@ -126,15 +124,8 @@ class Book(models.Model):
     age_group = models.ForeignKey(AgeGroup, on_delete=models.CASCADE, related_name='books')
     language = models.ForeignKey(Language, on_delete=models.CASCADE, related_name='books')
     cover_image_url = models.URLField(blank=True, null=True)
-    author = models.CharField(max_length=255, blank=True)
-    book_order = models.IntegerField(default=0, help_text="Order for displaying books in list")
+    book_order = models.IntegerField(default=0, help_text="Order for displaying books in list", null=True, blank=True)
     is_active = models.BooleanField(default=True, help_text="Whether the book is active and visible")
-    total_chapters = models.IntegerField(default=0, help_text="Total number of chapters in the book (cached, updated after parsing)")
-    source_file_url = models.URLField(blank=True, null=True, help_text="URL/path to the source markdown file")
-    source_file_name = models.CharField(max_length=255, blank=True, null=True, help_text="Name of the source markdown file")
-    is_parsed = models.BooleanField(default=False, help_text="Whether chapters have been extracted from markdown file")
-    parsed_at = models.DateTimeField(null=True, blank=True, help_text="When the markdown file was parsed")
-    metadata = models.JSONField(blank=True, null=True, default=dict, help_text="Additional metadata (e.g., testament: Old/New)")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -148,53 +139,36 @@ class Book(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.title} - {self.get_category_display()}"
+        category_name = str(self.category) if self.category else "No Category"
+        return f"{self.title} - {category_name}"
 
-
-class BookContent(models.Model):
-    book_content_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name='contents')
-    chapter_number = models.IntegerField(null=True, blank=True, help_text="Chapter number extracted from markdown (e.g., 1 from '[Genesis 1]')")
-    chapter_title = models.CharField(max_length=255, blank=True, help_text="Chapter title (e.g., 'Genesis 1')")
-    content = models.TextField(help_text="Full markdown content for this chapter, including all verses")
-    content_order = models.IntegerField(default=0, help_text="Order of chapter in the book (usually same as chapter_number)")
-    metadata = models.JSONField(
-        blank=True, 
-        null=True, 
-        default=dict,
-        help_text="Additional metadata (e.g., verse_range: '1:1-1:31', raw_markdown_title: '__[Genesis 1]__')"
-    )
+class Chapters(models.Model):
+    chapter_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name='chapters')
+    title = models.CharField(max_length=255, blank=True, null=True)
+    description = models.TextField(blank=True, null=True)
+    chapter_number = models.IntegerField(default=0, help_text="Chapter number", null=True, blank=True)
+    chapter_name = models.CharField(max_length=255, blank=True, null=True)
+    chapter_url = models.URLField(blank=True, null=True, help_text="URL/path to the chapter file")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    metadata = models.JSONField(blank=True, null=True, default=dict, help_text="Additional metadata (e.g., testament: Old/New)")
+    video_url = models.URLField(blank=True, null=True, help_text="URL/path to the video file")
 
     class Meta:
-        db_table = 'bible_way_book_content'
-        ordering = ['content_order', 'chapter_number']
-        indexes = [
-            models.Index(fields=['book', 'chapter_number']),
-            models.Index(fields=['book', 'content_order']),
-        ]
-        unique_together = [('book', 'chapter_number')]  # Ensure one chapter per number per book
+        db_table = 'bible_way_chapters'
 
     def __str__(self):
-        if self.chapter_number:
-            return f"{self.book.title} - Chapter {self.chapter_number}"
-        return f"{self.book.title} - {self.chapter_title}"
+        return f"{self.title} - {self.book.title}"
 
 
 class ReadingProgress(models.Model):
     reading_progress_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='reading_progresses')
     book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name='reading_progresses')
-    book_content = models.ForeignKey(
-        BookContent,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='reading_progresses'
-    )
-    last_position = models.CharField(max_length=255, blank=True)  # e.g., "chapter:verse" or "section:paragraph"
     progress_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0.00)
+    block_id = models.CharField(max_length=255, blank=True, null=True)
+    chapter_id = models.ForeignKey(Chapters, on_delete=models.CASCADE, related_name='reading_progresses',blank=True, null=True)
     last_read_at = models.DateTimeField(auto_now=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -204,20 +178,16 @@ class ReadingProgress(models.Model):
         unique_together = ('user', 'book')
 
     def __str__(self):
-        return f"{self.user.user_name} - {self.book.title} ({self.progress_percentage}%)"
+        return f"{self.user.username} - {self.book.title} ({self.progress_percentage}%)"
 
 
 class ReadingNote(models.Model):
     note_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='reading_notes')
     book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name='reading_notes')
-    book_content = models.ForeignKey(
-        BookContent,
-        on_delete=models.CASCADE,
-        related_name='reading_notes'
-    )
-    note_text = models.TextField()
-    position_reference = models.CharField(max_length=255, blank=True)  # Where in content
+    chapter_id = models.UUIDField(blank=True, null=True)
+    block_id = models.CharField(max_length=255, blank=True, null=True)
+    content = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -225,29 +195,39 @@ class ReadingNote(models.Model):
         db_table = 'bible_way_reading_note'
 
     def __str__(self):
-        return f"Note {self.note_id} by {self.user.user_name} on {self.book.title}"
+        return f"Note {self.note_id} by {self.user.username} on {self.book.title}"
 
 
 class Highlight(models.Model):
     highlight_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='highlights')
     book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name='highlights')
-    book_content = models.ForeignKey(
-        BookContent,
-        on_delete=models.CASCADE,
-        related_name='highlights'
-    )
-    highlighted_text = models.TextField()
-    start_position = models.CharField(max_length=255)
-    end_position = models.CharField(max_length=255)
+    chapter = models.ForeignKey(Chapters, on_delete=models.CASCADE, related_name='highlights',default=None)
+    start_block_id = models.CharField(max_length=255, blank=True, null=True)
+    end_block_id = models.CharField(max_length=255, blank=True, null=True)
+    start_offset = models.CharField(max_length=255)
+    end_offset = models.CharField(max_length=255)
     color = models.CharField(max_length=50, blank=True, default='yellow')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
 
     class Meta:
         db_table = 'bible_way_highlight'
 
     def __str__(self):
-        return f"Highlight {self.highlight_id} by {self.user.user_name} on {self.book.title}"
+        return f"Highlight {self.highlight_id} by {self.user.username} on {self.book.title}"
 
+class Bookmark(models.Model):
+    bookmark_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='bookmarks')
+    book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name='bookmarks')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        db_table = 'bible_way_bookmark'
+
+    def __str__(self):
+        return f"Bookmark {self.bookmark_id} by {self.user.username} on {self.book.title}"
+    

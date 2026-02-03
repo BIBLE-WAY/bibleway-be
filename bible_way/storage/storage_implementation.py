@@ -1,9 +1,13 @@
 from django.contrib.auth.hashers import make_password, check_password
-from django.db.models import Count, Q
+from django.db.models import Count, Q, Case, When, Value, IntegerField, Exists, OuterRef, Avg
 import uuid
 import os
-from bible_way.models import User, UserFollowers, Post, Media, Comment, Reaction, Promotion, PromotionImage, PrayerRequest, Verse, Category, AgeGroup, Book, BookContent, Language
+import secrets
+from typing import Tuple
+from bible_way.models import User, UserFollowers, Post, Media, Comment, Reaction, Promotion, PromotionImage, PrayerRequest, Testimonial, Verse, Category, AgeGroup, Book, Language, Highlight, ShareLink, ShareLinkContentTypeChoices, Wallpaper, Sticker, ChapterFeedback
+from bible_way.models.book_reading import ReadingNote, Chapters, Bookmark, ReadingProgress
 from bible_way.storage.s3_utils import upload_file_to_s3 as s3_upload_file
+from bible_way.utils.s3_url_helper import get_presigned_url, get_public_url
 
 
 class UserDB:
@@ -15,8 +19,9 @@ class UserDB:
             return None
     
     def get_user_by_user_name(self, user_name: str) -> User | None:
+        """Map API user_name parameter to username for lookup"""
         try:
-            return User.objects.get(user_name=user_name)
+            return User.objects.get(username=user_name)
         except User.DoesNotExist:
             return None
     
@@ -26,20 +31,18 @@ class UserDB:
         except User.DoesNotExist:
             return None
     
-    def create_user(self, username: str, user_name: str, email: str, password: str, 
-                    country: str, age: int, preferred_language: str, 
-                    profile_picture_url: str = None) -> User:
+    def create_user(self, username: str, email: str, password: str, 
+                    country: str, age: int, preferred_language: str) -> User:
         hashed_password = make_password(password)
         
         user = User.objects.create(
             username=username,
-            user_name=user_name,
             email=email,
             country=country,
             age=age,
             preferred_language=preferred_language,
             password=hashed_password,
-            profile_picture_url=profile_picture_url
+            is_email_verified=False
         )
         
         return user
@@ -56,19 +59,19 @@ class UserDB:
         except User.DoesNotExist:
             return None
     
-    def create_google_user(self, username: str, user_name: str, email: str, google_id: str,
+    def create_google_user(self, username: str, email: str, google_id: str,
                           country: str, age: int, preferred_language: str, 
                           profile_picture_url: str = None) -> User:
         user = User(
             username=username,
-            user_name=user_name,
             email=email,
             google_id=google_id,
             country=country,
             age=age,
             preferred_language=preferred_language,
             profile_picture_url=profile_picture_url,
-            auth_provider='GOOGLE'
+            auth_provider='GOOGLE',
+            is_email_verified=True  # Google already verified the email
         )
         user.set_unusable_password()
         user.save()
@@ -76,6 +79,73 @@ class UserDB:
     
     def update_user_auth_provider(self, user: User, provider: str) -> User:
         user.auth_provider = provider
+        user.save()
+        return user
+    
+    def update_user_otp(self, user: User, otp: str, expiry) -> User:
+        """Update user's email verification OTP and expiry"""
+        user.email_verification_otp = otp
+        user.otp_expiry = expiry
+        user.save()
+        return user
+    
+    def verify_user_email(self, user: User) -> User:
+        """Mark user's email as verified and clear OTP fields"""
+        user.is_email_verified = True
+        user.email_verification_otp = None
+        user.otp_expiry = None
+        user.save()
+        return user
+    
+    def update_password_reset_otp(self, user: User, otp: str, expiry) -> User:
+        """Update user's password reset OTP and expiry (reuses email_verification_otp field)"""
+        user.email_verification_otp = otp
+        user.otp_expiry = expiry
+        user.save()
+        return user
+    
+    def update_user_password(self, user: User, new_password: str) -> User:
+        """Update user's password"""
+        user.password = make_password(new_password)
+        user.save()
+        return user
+    
+    def clear_password_reset_otp(self, user: User) -> User:
+        """Clear password reset OTP fields"""
+        user.email_verification_otp = None
+        user.otp_expiry = None
+        user.save()
+        return user
+    
+    def update_user_profile(self, user_id: str, username: str = None, preferred_language: str = None, 
+                           age: int = None, country: str = None, profile_picture_url: str = None) -> User:
+        """
+        Update user profile fields (username, preferred_language, age, country, profile_picture_url)
+        Only updates fields that are provided (not None)
+        Username must be unique (excluding current user)
+        """
+        user = self.get_user_by_user_id(user_id)
+        if not user:
+            return None
+        
+        # Update username if provided
+        if username is not None:
+            # Check if username is already taken by another user
+            existing_user = self.get_user_by_username(username)
+            if existing_user and str(existing_user.user_id) != user_id:
+                raise Exception("Username is already taken")
+            user.username = username
+        
+        # Update only provided fields
+        if preferred_language is not None:
+            user.preferred_language = preferred_language
+        if age is not None:
+            user.age = age
+        if country is not None:
+            user.country = country
+        if profile_picture_url is not None:
+            user.profile_picture_url = profile_picture_url
+        
         user.save()
         return user
     
@@ -104,18 +174,7 @@ class UserDB:
     
     def search_users(self, query: str, limit: int = 20, current_user_id: str = None) -> dict:
         """
-        Search users by username (partial match, case-insensitive).
-        
-        Args:
-            query: Search term (e.g., "ven")
-            limit: Maximum number of results
-            current_user_id: Optional - to include follow status and followers count
-            
-        Returns:
-            Dictionary with:
-            - users: List of user dictionaries
-            - total_count: Total matching users
-            - query: Original search query
+        Search users by username using Elasticsearch.
         """
         if not query or len(query.strip()) < 2:
             return {
@@ -136,7 +195,7 @@ class UserDB:
         from django.db.models import Case, When, IntegerField, Count
         
         # Build base query
-        base_query = Q(user_name__iexact=query) | Q(user_name__istartswith=query) | Q(user_name__icontains=query)
+        base_query = Q(username__iexact=query) | Q(username__istartswith=query) | Q(username__icontains=query)
         
         # Exclude current user from results
         if current_user_uuid:
@@ -145,14 +204,14 @@ class UserDB:
         # Build query with priority ordering
         users = User.objects.filter(base_query).annotate(
             priority=Case(
-                When(user_name__iexact=query, then=1),
-                When(user_name__istartswith=query, then=2),
-                When(user_name__icontains=query, then=3),
+                When(username__iexact=query, then=1),
+                When(username__istartswith=query, then=2),
+                When(username__icontains=query, then=3),
                 output_field=IntegerField()
             )
         ).annotate(
             followers_count=Count('followed', distinct=True)
-        ).order_by('priority', 'user_name')[:limit]
+        ).order_by('priority', 'username')[:limit]
         
         # Get total count (without limit, excluding current user)
         total_count = User.objects.filter(base_query).count()
@@ -161,9 +220,10 @@ class UserDB:
         for user in users:
             user_data = {
                 'user_id': str(user.user_id),
-                'user_name': user.user_name,
-                'profile_picture_url': user.profile_picture_url or '',
-                'followers_count': user.followers_count
+                'user_name': user.username,  # Map username to user_name for API response
+                'profile_picture_url': get_presigned_url(user.profile_picture_url) if user.profile_picture_url else '',
+                'followers_count': user.followers_count,
+                'is_admin': user.is_staff
             }
             
             # Add follow status and conversation_id if current_user_id provided
@@ -198,6 +258,114 @@ class UserDB:
             'query': query
         }
     
+    def get_recommended_users(self, user_id: str, limit: int = 20) -> dict:
+        try:
+            user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+        except (ValueError, TypeError):
+            raise Exception("Invalid user_id format")
+        
+        limit = min(max(1, int(limit)), 20)
+        
+        following_user_ids = UserFollowers.objects.filter(
+            follower_id__user_id=user_uuid
+        ).values_list('followed_id__user_id', flat=True)
+        
+        queryset = User.objects.exclude(user_id=user_uuid).exclude(
+            user_id__in=following_user_ids
+        ).exclude(
+            is_staff=True
+        ).exclude(
+            is_superuser=True
+        )
+        
+        users = queryset.annotate(
+            followers_count=Count('followed', distinct=True)
+        ).order_by('-followers_count', 'username')[:limit]
+        
+        total_count = queryset.count()
+        
+        users_data = []
+        for user in users:
+            users_data.append({
+                'user_id': str(user.user_id),
+                'user_name': user.username,  # Map username to user_name for API response
+                'profile_image': user.profile_picture_url or ''
+            })
+        
+        return {
+            'users': users_data,
+            'total_count': total_count
+        }
+    
+    def get_user_following(self, user_id: str) -> dict:
+        """Get list of users that the given user is following"""
+        try:
+            user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+        except (ValueError, TypeError):
+            raise Exception("Invalid user_id format")
+        
+        # Get all UserFollowers where this user is the follower
+        following_relationships = UserFollowers.objects.filter(
+            follower_id__user_id=user_uuid
+        ).select_related('followed_id')
+        
+        users_data = []
+        for relationship in following_relationships:
+            followed_user = relationship.followed_id
+            users_data.append({
+                'user_name': followed_user.username,
+                'profile_picture': followed_user.profile_picture_url or ''
+            })
+        
+        return {
+            'users': users_data,
+            'total_count': len(users_data)
+        }
+    
+    def get_user_followers(self, user_id: str, current_user_id: str = None) -> dict:
+        """Get list of users who are following the given user"""
+        try:
+            user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+        except (ValueError, TypeError):
+            raise Exception("Invalid user_id format")
+        
+        # Get all UserFollowers where this user is being followed
+        follower_relationships = UserFollowers.objects.filter(
+            followed_id__user_id=user_uuid
+        ).select_related('follower_id')
+        
+        # Get current user UUID if provided
+        current_user_uuid = None
+        if current_user_id:
+            try:
+                current_user_uuid = uuid.UUID(current_user_id) if isinstance(current_user_id, str) else current_user_id
+            except (ValueError, TypeError):
+                current_user_uuid = None
+        
+        users_data = []
+        for relationship in follower_relationships:
+            follower_user = relationship.follower_id
+            follower_user_uuid = follower_user.user_id
+            
+            # Check if current_user is following this follower
+            is_following = False
+            if current_user_uuid:
+                is_following = UserFollowers.objects.filter(
+                    follower_id__user_id=current_user_uuid,
+                    followed_id__user_id=follower_user_uuid
+                ).exists()
+            
+            users_data.append({
+                'user_name': follower_user.username,
+                'profile_picture': follower_user.profile_picture_url or '',
+                'is_following': is_following
+            })
+        
+        return {
+            'users': users_data,
+            'total_count': len(users_data)
+        }
+    
     def follow_user(self, follower_id: str, followed_id: str) -> UserFollowers:
         import uuid
         follower_uuid = uuid.UUID(follower_id) if isinstance(follower_id, str) else follower_id
@@ -227,6 +395,65 @@ class UserDB:
         except UserFollowers.DoesNotExist:
             return False
     
+    def get_complete_user_profile(self, user_id: str, current_user_id: str | None = None):
+        from bible_way.storage.dtos import CompleteUserProfileResponseDTO
+        
+        try:
+            user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+        except (ValueError, TypeError):
+            return None
+        
+        # Get user with follower and following counts
+        user = User.objects.filter(user_id=user_uuid).annotate(
+            followers_count=Count('followed', distinct=True),
+            following_count=Count('follower', distinct=True)
+        ).first()
+        
+        if not user:
+            return None
+        
+        # Check if current_user is following this user
+        is_following = False
+        conversation_id = None
+        if current_user_id:
+            try:
+                current_user_uuid = uuid.UUID(current_user_id) if isinstance(current_user_id, str) else current_user_id
+                is_following = UserFollowers.objects.filter(
+                    follower_id__user_id=current_user_uuid,
+                    followed_id__user_id=user_uuid
+                ).exists()
+                
+                # Check if conversation exists between current user and profile user
+                try:
+                    from project_chat.storage import ChatDB
+                    chat_db = ChatDB()
+                    conversation = chat_db.find_conversation_between_users(
+                        current_user_id,
+                        str(user.user_id)
+                    )
+                    conversation_id = str(conversation.id) if conversation else None
+                except Exception as e:
+                    # If conversation table doesn't exist or other error, set to None
+                    conversation_id = None
+            except (ValueError, TypeError):
+                is_following = False
+                conversation_id = None
+        
+        return CompleteUserProfileResponseDTO(
+            user_id=str(user.user_id),
+            user_name=user.username,  # Map username to user_name for API response
+            email=user.email,
+            country=user.country,
+            age=user.age,
+            preferred_language=user.preferred_language,
+            profile_picture_url=user.profile_picture_url,
+            is_admin=user.is_staff,
+            followers_count=user.followers_count,
+            following_count=user.following_count,
+            is_following=is_following,
+            conversation_id=conversation_id
+        )
+    
     def create_post(self, user_id: str, title: str = '', description: str = '') -> Post:
         user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
         user = User.objects.get(user_id=user_uuid)
@@ -237,6 +464,38 @@ class UserDB:
             description=description
         )
         return post
+    
+    def validate_media_file_type(self, file_obj) -> Tuple[bool, str]:
+        """
+        Validate if file type is supported for posts.
+        
+        Args:
+            file_obj: File object with name attribute
+            
+        Returns:
+            tuple: (is_valid, error_message)
+            - is_valid: True if file type is supported
+            - error_message: Error message if invalid, empty string if valid
+        """
+        if not file_obj or not hasattr(file_obj, 'name'):
+            return False, "Invalid file object"
+        
+        filename = file_obj.name.lower()
+        path = filename.split('?')[0]
+        file_ext = os.path.splitext(path)[1]
+        
+        # Supported extensions
+        image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg']
+        video_extensions = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.flv', '.wmv', '.m4v']
+        audio_extensions = ['.mp3', '.wav', '.aac', '.ogg', '.m4a', '.flac']
+        
+        all_supported = image_extensions + video_extensions + audio_extensions
+        
+        if file_ext not in all_supported:
+            supported_types = "Images (jpg, jpeg, png, gif, webp, bmp, svg), Videos (mp4, mov, avi, mkv, webm, flv, wmv, m4v), Audio (mp3, wav, aac, ogg, m4a, flac)"
+            return False, f"Invalid file format '{file_ext}'. Supported formats: {supported_types}"
+        
+        return True, ""
     
     def get_media_type_from_file(self, file_obj) -> str:
         if not file_obj or not hasattr(file_obj, 'name'):
@@ -260,15 +519,30 @@ class UserDB:
         elif file_ext in audio_extensions:
             return Media.AUDIO
         else:
-            return Media.IMAGE
+            # Don't default to IMAGE - this should be caught by validation
+            raise ValueError(f"Unsupported file type: {file_ext}")
     
-    def _generate_s3_key(self, user_id: str, post_id: str, filename: str) -> str:
-        safe_filename = os.path.basename(filename)
-        return f"bible_way/user/post/{user_id}/{post_id}/{safe_filename}"
+    def _generate_s3_key(self, user_id: str, post_id: str = None, prayer_request_id: str = None, testimonial_id: str = None, filename: str = None) -> str:
+        safe_filename = os.path.basename(filename) if filename else "file"
+        if post_id:
+            return f"bible_way/user/post/{user_id}/{post_id}/{safe_filename}"
+        elif prayer_request_id:
+            return f"bible_way/user/prayer_request/{user_id}/{prayer_request_id}/{safe_filename}"
+        elif testimonial_id:
+            return f"bible_way/user/testimonial/{user_id}/{testimonial_id}/{safe_filename}"
+        else:
+            return f"bible_way/user/media/{user_id}/{safe_filename}"
     
-    def upload_file_to_s3(self, post: Post, media_file, user_id: str) -> str:
+    def upload_file_to_s3(self, post: Post = None, prayer_request: PrayerRequest = None, testimonial: Testimonial = None, media_file = None, user_id: str = None) -> str:
         try:
-            s3_key = self._generate_s3_key(str(user_id), str(post.post_id), media_file.name)
+            if post:
+                s3_key = self._generate_s3_key(str(user_id), post_id=str(post.post_id), filename=media_file.name)
+            elif prayer_request:
+                s3_key = self._generate_s3_key(str(user_id), prayer_request_id=str(prayer_request.prayer_request_id), filename=media_file.name)
+            elif testimonial:
+                s3_key = self._generate_s3_key(str(user_id), testimonial_id=str(testimonial.testimonial_id), filename=media_file.name)
+            else:
+                raise Exception("Either post, prayer_request, or testimonial must be provided")
             
             s3_url = s3_upload_file(media_file, s3_key)
             
@@ -276,9 +550,14 @@ class UserDB:
         except Exception as e:
             raise Exception(f"Failed to upload file to S3: {str(e)}")
     
-    def create_media(self, post: Post, s3_url: str, media_type: str) -> Media:
+    def create_media(self, post: Post = None, prayer_request: PrayerRequest = None, testimonial: Testimonial = None, s3_url: str = None, media_type: str = None) -> Media:
+        if not post and not prayer_request and not testimonial:
+            raise Exception("Either post, prayer_request, or testimonial must be provided")
+        
         media = Media.objects.create(
             post=post,
+            prayer_request=prayer_request,
+            testimonial=testimonial,
             media_type=media_type,
             url=s3_url
         )
@@ -293,7 +572,7 @@ class UserDB:
         except (ValueError, TypeError):
             return None
     
-    def update_post(self, post_id: str, user_id: str, title: str = None, description: str = None) -> Post:
+    def update_post(self, post_id: str, user_id: str, title: str = None, description: str = None, media_urls: list = None) -> Post:
         post_uuid = uuid.UUID(post_id) if isinstance(post_id, str) else post_id
         user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
         
@@ -309,6 +588,25 @@ class UserDB:
             post.title = title.strip() if title else ''
         if description is not None:
             post.description = description.strip() if description else ''
+        
+        # Handle media_urls: replace all existing media with new URLs
+        if media_urls is not None:
+            # Delete all existing media for this post
+            post.media.all().delete()
+            
+            # Create new media objects from provided S3 URLs
+            if media_urls:  # Only create if list is not empty
+                for media_url in media_urls:
+                    if media_url:  # Skip empty strings
+                        # Determine media type from URL
+                        media_type = self._determine_media_type_from_filename(media_url)
+                        
+                        # Create new Media object
+                        self.create_media(
+                            post=post,
+                            s3_url=media_url,
+                            media_type=media_type
+                        )
         
         post.save()
         return post
@@ -342,6 +640,29 @@ class UserDB:
         )
         return comment
     
+    def create_chapter_feedback(self, chapter_id: str, user_id: str, description: str, rating: int) -> ChapterFeedback:
+        chapter_uuid = uuid.UUID(chapter_id) if isinstance(chapter_id, str) else chapter_id
+        user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+        
+        try:
+            chapter = Chapters.objects.get(chapter_id=chapter_uuid)
+        except Chapters.DoesNotExist:
+            raise Exception("Chapter not found")
+        
+        user = User.objects.get(user_id=user_uuid)
+        
+        # Validate rating range
+        if rating < 1 or rating > 5:
+            raise Exception("Rating must be between 1 and 5")
+        
+        feedback = ChapterFeedback.objects.create(
+            chapter=chapter,
+            user=user,
+            description=description.strip(),
+            rating=rating
+        )
+        return feedback
+    
     def get_comments_by_post(self, post_id: str, current_user_id: str = None) -> list:
         post_uuid = uuid.UUID(post_id) if isinstance(post_id, str) else post_id
         
@@ -351,7 +672,7 @@ class UserDB:
             raise Exception("Post not found")
         
         comments = Comment.objects.select_related('user').filter(post_id=post_uuid).annotate(
-            likes_count=Count('reactions')
+            likes_count=Count('reactions', filter=Q(reactions__reaction_type='like'))
         ).order_by('-created_at')
         
         current_user_uuid = None
@@ -376,8 +697,8 @@ class UserDB:
                 'comment_id': str(comment.comment_id),
                 'user': {
                     'user_id': str(comment.user.user_id),
-                    'user_name': comment.user.user_name,
-                    'profile_picture_url': comment.user.profile_picture_url or ''
+                    'user_name': comment.user.username,
+                    'profile_picture_url': get_presigned_url(comment.user.profile_picture_url) if comment.user.profile_picture_url else ''
                 },
                 'description': comment.description,
                 'likes_count': comment.likes_count,
@@ -522,17 +843,41 @@ class UserDB:
     def get_all_posts_with_counts(self, limit: int = 10, offset: int = 0, current_user_id: str = None) -> dict:
         total_count = Post.objects.count()
         
-        posts = Post.objects.select_related('user').prefetch_related('media').annotate(
-            likes_count=Count('reactions', filter=Q(reactions__post__isnull=False)),
-            comments_count=Count('comments')
-        ).order_by('-created_at')[offset:offset + limit]
-        
         current_user_uuid = None
         if current_user_id:
             try:
                 current_user_uuid = uuid.UUID(current_user_id) if isinstance(current_user_id, str) else current_user_id
             except (ValueError, TypeError):
                 current_user_uuid = None
+        
+        # Build queryset with annotations
+        queryset = Post.objects.select_related('user').prefetch_related('media').annotate(
+            likes_count=Count('reactions', filter=Q(reactions__reaction_type='like'), distinct=True),
+            comments_count=Count('comments', distinct=True)
+        )
+        
+        # Add following status annotation and ordering if user is authenticated
+        if current_user_uuid:
+            queryset = queryset.annotate(
+                is_following_author=Case(
+                    When(
+                        Exists(
+                            UserFollowers.objects.filter(
+                                follower_id__user_id=current_user_uuid,
+                                followed_id=OuterRef('user')
+                            )
+                        ),
+                        then=Value(1)
+                    ),
+                    default=Value(0),
+                    output_field=IntegerField()
+                )
+            ).order_by('-is_following_author', '-created_at')
+        else:
+            queryset = queryset.order_by('-created_at')
+        
+        # Apply pagination
+        posts = queryset[offset:offset + limit]
         
         posts_data = []
         for post in posts:
@@ -541,7 +886,7 @@ class UserDB:
                 media_list.append({
                     'media_id': str(media.media_id),
                     'media_type': media.media_type,
-                    'url': media.url
+                    'url': get_presigned_url(media.url)
                 })
             
             is_liked = False
@@ -563,8 +908,8 @@ class UserDB:
                 'post_id': str(post.post_id),
                 'user': {
                     'user_id': str(post.user.user_id),
-                    'user_name': post.user.user_name,
-                    'profile_picture_url': post.user.profile_picture_url or ''
+                    'user_name': post.user.username,  # Map username to user_name for API response
+                    'profile_picture_url': get_presigned_url(post.user.profile_picture_url) if post.user.profile_picture_url else ''
                 },
                 'title': post.title,
                 'description': post.description,
@@ -589,13 +934,99 @@ class UserDB:
             'has_previous': has_previous
         }
     
+    def get_post_by_id_with_counts(self, post_id: str, current_user_id: str | None = None) -> dict | None:
+        """Get a single post by ID with counts and user interaction status"""
+        try:
+            post_uuid = uuid.UUID(post_id) if isinstance(post_id, str) else post_id
+        except (ValueError, TypeError):
+            return None
+        
+        current_user_uuid = None
+        if current_user_id:
+            try:
+                current_user_uuid = uuid.UUID(current_user_id) if isinstance(current_user_id, str) else current_user_id
+            except (ValueError, TypeError):
+                current_user_uuid = None
+        
+        # Build queryset with annotations
+        queryset = Post.objects.select_related('user').prefetch_related('media').filter(post_id=post_uuid).annotate(
+            likes_count=Count('reactions', filter=Q(reactions__reaction_type='like'), distinct=True),
+            comments_count=Count('comments', distinct=True)
+        )
+        
+        # Add following status annotation if user is authenticated
+        if current_user_uuid:
+            queryset = queryset.annotate(
+                is_following_author=Case(
+                    When(
+                        Exists(
+                            UserFollowers.objects.filter(
+                                follower_id__user_id=current_user_uuid,
+                                followed_id=OuterRef('user')
+                            )
+                        ),
+                        then=Value(1)
+                    ),
+                    default=Value(0),
+                    output_field=IntegerField()
+                )
+            )
+        
+        post = queryset.first()
+        
+        if not post:
+            return None
+        
+        # Build media list
+        media_list = []
+        for media in post.media.all():
+            media_list.append({
+                'media_id': str(media.media_id),
+                'media_type': media.media_type,
+                'url': get_presigned_url(media.url)
+            })
+        
+        # Check user interaction status
+        is_liked = False
+        is_commented = False
+        
+        if current_user_uuid:
+            is_liked = Reaction.objects.filter(
+                post=post,
+                user__user_id=current_user_uuid,
+                reaction_type=Reaction.LIKE
+            ).exists()
+            
+            is_commented = Comment.objects.filter(
+                post=post,
+                user__user_id=current_user_uuid
+            ).exists()
+        
+        return {
+            'post_id': str(post.post_id),
+            'user': {
+                'user_id': str(post.user.user_id),
+                'user_name': post.user.username,  # Map username to user_name for API response
+                'profile_picture_url': get_presigned_url(post.user.profile_picture_url) if post.user.profile_picture_url else ''
+            },
+            'title': post.title,
+            'description': post.description,
+            'media': media_list,
+            'likes_count': post.likes_count,
+            'comments_count': post.comments_count,
+            'is_liked': is_liked,
+            'is_commented': is_commented,
+            'created_at': post.created_at.isoformat(),
+            'updated_at': post.updated_at.isoformat()
+        }
+    
     def get_user_posts_with_counts(self, user_id: str, limit: int = 10, offset: int = 0, current_user_id: str = None) -> dict:
         user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
         total_count = Post.objects.filter(user__user_id=user_uuid).count()
         
         posts = Post.objects.prefetch_related('media').filter(user__user_id=user_uuid).annotate(
-            likes_count=Count('reactions', filter=Q(reactions__post__isnull=False)),
-            comments_count=Count('comments')
+            likes_count=Count('reactions', filter=Q(reactions__reaction_type='like'), distinct=True),
+            comments_count=Count('comments', distinct=True)
         ).order_by('-created_at')[offset:offset + limit]
         
         current_user_uuid = None
@@ -612,7 +1043,7 @@ class UserDB:
                 media_list.append({
                     'media_id': str(media.media_id),
                     'media_type': media.media_type,
-                    'url': media.url
+                    'url': get_presigned_url(media.url)
                 })
             
             is_liked = False
@@ -659,7 +1090,7 @@ class UserDB:
         user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
         
         comments = Comment.objects.filter(user__user_id=user_uuid).annotate(
-            likes_count=Count('reactions')
+            likes_count=Count('reactions', filter=Q(reactions__reaction_type='like'))
         ).order_by('-created_at')
         
         comments_data = []
@@ -675,25 +1106,19 @@ class UserDB:
         return comments_data
     
     def get_all_promotions(self) -> list:
-        promotions = Promotion.objects.select_related('media').prefetch_related('promotion_images').order_by('-created_at')
+        promotions = Promotion.objects.prefetch_related('promotion_images').order_by('-created_at')
         
         promotions_data = []
         for promotion in promotions:
-            media_data = None
-            if promotion.media:
-                media_data = {
-                    'media_id': str(promotion.media.media_id),
-                    'media_type': promotion.media.media_type,
-                    'url': promotion.media.url
-                }
-            
             images_data = []
-            for image in promotion.promotion_images.all():
+            for image in promotion.promotion_images.all().order_by('order', 'created_at'):
                 images_data.append({
                     'promotion_image_id': str(image.promotion_image_id),
-                    'image_url': image.image_url,
+                    'image_url': get_presigned_url(image.image_url),
                     'image_type': image.image_type,
-                    'order': image.order
+                    'order': image.order,
+                    'created_at': image.created_at.isoformat(),
+                    'updated_at': image.updated_at.isoformat()
                 })
             
             promotions_data.append({
@@ -703,7 +1128,6 @@ class UserDB:
                 'price': str(promotion.price),
                 'redirect_link': promotion.redirect_link,
                 'meta_data': promotion.meta_data or {},
-                'media': media_data,
                 'images': images_data,
                 'created_at': promotion.created_at.isoformat(),
                 'updated_at': promotion.updated_at.isoformat()
@@ -711,19 +1135,309 @@ class UserDB:
         
         return promotions_data
     
-    def create_prayer_request(self, user_id: str, name: str, email: str, description: str, phone_number: str = None) -> PrayerRequest:
+    def get_all_wallpapers(self) -> list:
+        wallpapers = Wallpaper.objects.all().order_by('-created_at')
+        
+        wallpapers_data = []
+        for wallpaper in wallpapers:
+            wallpapers_data.append({
+                'wallpaper_id': str(wallpaper.wallpaper_id),
+                'image_url': get_presigned_url(wallpaper.image_url),
+                'filename': wallpaper.filename,
+                'created_at': wallpaper.created_at.isoformat()
+            })
+        
+        return wallpapers_data
+    
+    def get_all_stickers(self) -> list:
+        stickers = Sticker.objects.all().order_by('-created_at')
+        
+        stickers_data = []
+        for sticker in stickers:
+            stickers_data.append({
+                'sticker_id': str(sticker.sticker_id),
+                'image_url': get_public_url(sticker.image_url),  # Permanent URL with no expiration
+                'filename': sticker.filename,
+                'created_at': sticker.created_at.isoformat()
+            })
+        
+        return stickers_data
+    
+    def create_testimonial(self, user_id: str, description: str, rating: int) -> Testimonial:
+        user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+        user = User.objects.get(user_id=user_uuid)
+        testimonial = Testimonial.objects.create(
+            user=user,
+            description=description.strip(),
+            rating=rating
+        )
+        return testimonial
+    
+    def get_all_testimonials(self, limit: int = 10, offset: int = 0) -> dict:
+        """Get only verified testimonials for users"""
+        total_count = Testimonial.objects.filter(is_verified=True).count()
+        
+        testimonials = Testimonial.objects.filter(is_verified=True).select_related('user').prefetch_related('media').order_by('-created_at')[offset:offset + limit]
+        
+        testimonials_data = []
+        for testimonial in testimonials:
+            # Get media for this testimonial
+            media_list = []
+            for media in testimonial.media.all():
+                media_list.append({
+                    'media_id': str(media.media_id),
+                    'media_type': media.media_type,
+                    'url': get_presigned_url(media.url),
+                    'created_at': media.created_at.isoformat()
+                })
+            
+            testimonials_data.append({
+                'testimonial_id': str(testimonial.testimonial_id),
+                'user': {
+                    'user_id': str(testimonial.user.user_id),
+                    'user_name': testimonial.user.username,
+                    'profile_picture_url': get_presigned_url(testimonial.user.profile_picture_url) if testimonial.user.profile_picture_url else ''
+                },
+                'description': testimonial.description,
+                'rating': testimonial.rating,
+                'media': media_list,
+                'created_at': testimonial.created_at.isoformat(),
+                'updated_at': testimonial.updated_at.isoformat()
+            })
+        
+        has_next = (offset + limit) < total_count
+        has_previous = offset > 0
+        
+        return {
+            'testimonials': testimonials_data,
+            'limit': limit,
+            'offset': offset,
+            'total_count': total_count,
+            'has_next': has_next,
+            'has_previous': has_previous
+        }
+    
+    def get_all_testimonials_admin(self, limit: int = 10, offset: int = 0, status_filter: str = 'all') -> dict:
+        """Get all testimonials for admin with optional status filter"""
+        queryset = Testimonial.objects.select_related('user').prefetch_related('media')
+        
+        if status_filter == 'pending':
+            queryset = queryset.filter(is_verified=False)
+        elif status_filter == 'verified':
+            queryset = queryset.filter(is_verified=True)
+        # 'all' means no filter
+        
+        total_count = queryset.count()
+        testimonials = queryset.order_by('-created_at')[offset:offset + limit]
+        
+        testimonials_data = []
+        for testimonial in testimonials:
+            # Get media for this testimonial
+            media_list = []
+            for media in testimonial.media.all():
+                media_list.append({
+                    'media_id': str(media.media_id),
+                    'media_type': media.media_type,
+                    'url': get_presigned_url(media.url),
+                    'created_at': media.created_at.isoformat()
+                })
+            
+            testimonials_data.append({
+                'testimonial_id': str(testimonial.testimonial_id),
+                'user': {
+                    'user_id': str(testimonial.user.user_id),
+                    'user_name': testimonial.user.username,
+                    'profile_picture_url': get_presigned_url(testimonial.user.profile_picture_url) if testimonial.user.profile_picture_url else ''
+                },
+                'description': testimonial.description,
+                'rating': testimonial.rating,
+                'is_verified': testimonial.is_verified,
+                'media': media_list,
+                'created_at': testimonial.created_at.isoformat(),
+                'updated_at': testimonial.updated_at.isoformat()
+            })
+        
+        has_next = (offset + limit) < total_count
+        has_previous = offset > 0
+        
+        return {
+            'testimonials': testimonials_data,
+            'limit': limit,
+            'offset': offset,
+            'total_count': total_count,
+            'has_next': has_next,
+            'has_previous': has_previous
+        }
+    
+    def get_all_chapter_feedbacks_admin(self) -> dict:
+        """Get all chapter feedbacks grouped by book_id and chapter_id"""
+        # Fetch all feedbacks with related data
+        feedbacks = ChapterFeedback.objects.select_related(
+            'chapter', 
+            'chapter__book', 
+            'user'
+        ).order_by('-created_at')
+        
+        # Group feedbacks by book_id, then by chapter_id
+        books_dict = {}
+        total_feedbacks = 0
+        
+        for feedback in feedbacks:
+            chapter = feedback.chapter
+            book = chapter.book
+            
+            book_id = str(book.book_id)
+            chapter_id = str(chapter.chapter_id)
+            
+            # Initialize book if not exists
+            if book_id not in books_dict:
+                books_dict[book_id] = {
+                    'book_id': book_id,
+                    'book_title': book.title,
+                    'book_description': book.description or '',
+                    'total_feedbacks': 0,
+                    'chapters': {}
+                }
+            
+            # Initialize chapter if not exists
+            if chapter_id not in books_dict[book_id]['chapters']:
+                books_dict[book_id]['chapters'][chapter_id] = {
+                    'chapter_id': chapter_id,
+                    'chapter_title': chapter.title or '',
+                    'chapter_number': chapter.chapter_number or 0,
+                    'chapter_name': chapter.chapter_name or '',
+                    'total_feedbacks': 0,
+                    'average_rating': 0.0,
+                    'feedbacks': []
+                }
+            
+            # Add feedback to chapter
+            feedback_data = {
+                'feedback_id': str(feedback.feedback_id),
+                'user': {
+                    'user_id': str(feedback.user.user_id),
+                    'username': feedback.user.username,
+                    'email': feedback.user.email,
+                    'profile_picture': get_presigned_url(feedback.user.profile_picture_url) if feedback.user.profile_picture_url else None
+                },
+                'description': feedback.description,
+                'rating': feedback.rating,
+                'created_at': feedback.created_at.isoformat(),
+                'updated_at': feedback.updated_at.isoformat()
+            }
+            
+            books_dict[book_id]['chapters'][chapter_id]['feedbacks'].append(feedback_data)
+            books_dict[book_id]['chapters'][chapter_id]['total_feedbacks'] += 1
+            books_dict[book_id]['total_feedbacks'] += 1
+            total_feedbacks += 1
+        
+        # Calculate average rating for each chapter and convert to list structure
+        books_list = []
+        for book_id, book_data in books_dict.items():
+            chapters_list = []
+            for chapter_id, chapter_data in book_data['chapters'].items():
+                # Calculate average rating
+                ratings = [f['rating'] for f in chapter_data['feedbacks']]
+                if ratings:
+                    chapter_data['average_rating'] = round(sum(ratings) / len(ratings), 2)
+                else:
+                    chapter_data['average_rating'] = 0.0
+                
+                # Remove the nested dict and convert to list item
+                chapters_list.append(chapter_data)
+            
+            # Sort chapters by chapter_number
+            chapters_list.sort(key=lambda x: x['chapter_number'])
+            
+            book_data['chapters'] = chapters_list
+            books_list.append(book_data)
+        
+        # Sort books by title
+        books_list.sort(key=lambda x: x['book_title'])
+        
+        return {
+            'total_feedbacks': total_feedbacks,
+            'total_books': len(books_list),
+            'books': books_list
+        }
+    
+    def approve_testimonial(self, testimonial_id: str) -> Testimonial:
+        testimonial_uuid = uuid.UUID(testimonial_id) if isinstance(testimonial_id, str) else testimonial_id
+        try:
+            testimonial = Testimonial.objects.get(testimonial_id=testimonial_uuid)
+        except Testimonial.DoesNotExist:
+            raise Exception("Testimonial not found")
+        
+        testimonial.is_verified = True
+        testimonial.save()
+        return testimonial
+    
+    def reject_testimonial(self, testimonial_id: str) -> bool:
+        testimonial_uuid = uuid.UUID(testimonial_id) if isinstance(testimonial_id, str) else testimonial_id
+        try:
+            testimonial = Testimonial.objects.get(testimonial_id=testimonial_uuid)
+        except Testimonial.DoesNotExist:
+            raise Exception("Testimonial not found")
+        
+        testimonial.delete()
+        return True
+    
+    def get_user_testimonials(self, user_id: str, limit: int = 10, offset: int = 0) -> dict:
+        """Get user's testimonials (both verified and pending)"""
+        user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+        total_count = Testimonial.objects.filter(user__user_id=user_uuid).count()
+        
+        testimonials = Testimonial.objects.filter(user__user_id=user_uuid).select_related('user').prefetch_related('media').order_by('-created_at')[offset:offset + limit]
+        
+        testimonials_data = []
+        for testimonial in testimonials:
+            # Get media for this testimonial
+            media_list = []
+            for media in testimonial.media.all():
+                media_list.append({
+                    'media_id': str(media.media_id),
+                    'media_type': media.media_type,
+                    'url': get_presigned_url(media.url),
+                    'created_at': media.created_at.isoformat()
+                })
+            
+            testimonials_data.append({
+                'testimonial_id': str(testimonial.testimonial_id),
+                'user': {
+                    'user_id': str(testimonial.user.user_id),
+                    'user_name': testimonial.user.username,
+                    'profile_picture_url': get_presigned_url(testimonial.user.profile_picture_url) if testimonial.user.profile_picture_url else ''
+                },
+                'description': testimonial.description,
+                'rating': testimonial.rating,
+                'is_verified': testimonial.is_verified,
+                'media': media_list,
+                'created_at': testimonial.created_at.isoformat(),
+                'updated_at': testimonial.updated_at.isoformat()
+            })
+        
+        has_next = (offset + limit) < total_count
+        has_previous = offset > 0
+        
+        return {
+            'testimonials': testimonials_data,
+            'limit': limit,
+            'offset': offset,
+            'total_count': total_count,
+            'has_next': has_next,
+            'has_previous': has_previous
+        }
+    
+    def create_prayer_request(self, user_id: str, description: str) -> PrayerRequest:
         user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
         user = User.objects.get(user_id=user_uuid)
         prayer_request = PrayerRequest.objects.create(
             user=user,
-            name=name.strip(),
-            email=email.strip(),
-            phone_number=phone_number.strip() if phone_number else None,
             description=description.strip()
         )
         return prayer_request
     
-    def update_prayer_request(self, prayer_request_id: str, user_id: str, name: str = None, email: str = None, phone_number: str = None, description: str = None) -> PrayerRequest:
+    def update_prayer_request(self, prayer_request_id: str, user_id: str, description: str = None) -> PrayerRequest:
         prayer_request_uuid = uuid.UUID(prayer_request_id) if isinstance(prayer_request_id, str) else prayer_request_id
         user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
         
@@ -735,12 +1449,6 @@ class UserDB:
         if prayer_request.user.user_id != user_uuid:
             raise Exception("You are not authorized to update this prayer request")
         
-        if name is not None:
-            prayer_request.name = name.strip()
-        if email is not None:
-            prayer_request.email = email.strip()
-        if phone_number is not None:
-            prayer_request.phone_number = phone_number.strip()
         if description is not None:
             prayer_request.description = description.strip()
         
@@ -762,29 +1470,54 @@ class UserDB:
         prayer_request.delete()
         return True
     
-    def get_all_prayer_requests(self, limit: int = 10, offset: int = 0) -> dict:
+    def get_all_prayer_requests(self, limit: int = 10, offset: int = 0, current_user_id: str = None) -> dict:
         total_count = PrayerRequest.objects.count()
         
-        prayer_requests = PrayerRequest.objects.select_related('user').annotate(
+        current_user_uuid = None
+        if current_user_id:
+            try:
+                current_user_uuid = uuid.UUID(current_user_id) if isinstance(current_user_id, str) else current_user_id
+            except (ValueError, TypeError):
+                current_user_uuid = None
+        
+        prayer_requests = PrayerRequest.objects.select_related('user').prefetch_related('media').annotate(
             comments_count=Count('comments'),
-            reactions_count=Count('reactions')
+            reactions_count=Count('reactions', filter=Q(reactions__reaction_type='like'))
         ).order_by('-created_at')[offset:offset + limit]
         
         prayer_requests_data = []
         for prayer_request in prayer_requests:
+            is_liked = False
+            
+            if current_user_uuid:
+                is_liked = Reaction.objects.filter(
+                    prayer_request=prayer_request,
+                    user__user_id=current_user_uuid,
+                    reaction_type=Reaction.LIKE
+                ).exists()
+            
+            # Get media for this prayer request
+            media_list = []
+            for media in prayer_request.media.all():
+                media_list.append({
+                    'media_id': str(media.media_id),
+                    'media_type': media.media_type,
+                    'url': get_presigned_url(media.url),
+                    'created_at': media.created_at.isoformat()
+                })
+            
             prayer_requests_data.append({
                 'prayer_request_id': str(prayer_request.prayer_request_id),
                 'user': {
                     'user_id': str(prayer_request.user.user_id),
-                    'user_name': prayer_request.user.user_name,
-                    'profile_picture_url': prayer_request.user.profile_picture_url or ''
+                    'user_name': prayer_request.user.username,  # Map username to user_name for API response
+                    'profile_picture_url': get_presigned_url(prayer_request.user.profile_picture_url) if prayer_request.user.profile_picture_url else ''
                 },
-                'name': prayer_request.name,
-                'email': prayer_request.email,
-                'phone_number': prayer_request.phone_number,
                 'description': prayer_request.description,
+                'media': media_list,
                 'comments_count': prayer_request.comments_count,
                 'reactions_count': prayer_request.reactions_count,
+                'is_liked': is_liked,
                 'created_at': prayer_request.created_at.isoformat(),
                 'updated_at': prayer_request.updated_at.isoformat()
             })
@@ -801,31 +1534,56 @@ class UserDB:
             'has_previous': has_previous
         }
     
-    def get_user_prayer_requests(self, user_id: str, limit: int = 10, offset: int = 0) -> dict:
+    def get_user_prayer_requests(self, user_id: str, limit: int = 10, offset: int = 0, current_user_id: str = None) -> dict:
         user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
         
         total_count = PrayerRequest.objects.filter(user__user_id=user_uuid).count()
         
-        prayer_requests = PrayerRequest.objects.filter(user__user_id=user_uuid).select_related('user').annotate(
+        prayer_requests = PrayerRequest.objects.filter(user__user_id=user_uuid).select_related('user').prefetch_related('media').annotate(
             comments_count=Count('comments'),
-            reactions_count=Count('reactions')
+            reactions_count=Count('reactions', filter=Q(reactions__reaction_type='like'))
         ).order_by('-created_at')[offset:offset + limit]
+        
+        current_user_uuid = None
+        if current_user_id:
+            try:
+                current_user_uuid = uuid.UUID(current_user_id) if isinstance(current_user_id, str) else current_user_id
+            except (ValueError, TypeError):
+                current_user_uuid = None
         
         prayer_requests_data = []
         for prayer_request in prayer_requests:
+            is_liked = False
+            
+            if current_user_uuid:
+                is_liked = Reaction.objects.filter(
+                    prayer_request=prayer_request,
+                    user__user_id=current_user_uuid,
+                    reaction_type=Reaction.LIKE
+                ).exists()
+            
+            # Get media for this prayer request
+            media_list = []
+            for media in prayer_request.media.all():
+                media_list.append({
+                    'media_id': str(media.media_id),
+                    'media_type': media.media_type,
+                    'url': get_presigned_url(media.url),
+                    'created_at': media.created_at.isoformat()
+                })
+            
             prayer_requests_data.append({
                 'prayer_request_id': str(prayer_request.prayer_request_id),
                 'user': {
                     'user_id': str(prayer_request.user.user_id),
-                    'user_name': prayer_request.user.user_name,
-                    'profile_picture_url': prayer_request.user.profile_picture_url or ''
+                    'user_name': prayer_request.user.username,  # Map username to user_name for API response
+                    'profile_picture_url': get_presigned_url(prayer_request.user.profile_picture_url) if prayer_request.user.profile_picture_url else ''
                 },
-                'name': prayer_request.name,
-                'email': prayer_request.email,
-                'phone_number': prayer_request.phone_number,
                 'description': prayer_request.description,
+                'media': media_list,
                 'comments_count': prayer_request.comments_count,
                 'reactions_count': prayer_request.reactions_count,
+                'is_liked': is_liked,
                 'created_at': prayer_request.created_at.isoformat(),
                 'updated_at': prayer_request.updated_at.isoformat()
             })
@@ -869,7 +1627,7 @@ class UserDB:
             raise Exception("Prayer request not found")
         
         comments = Comment.objects.select_related('user').filter(prayer_request_id=prayer_request_uuid).annotate(
-            likes_count=Count('reactions')
+            likes_count=Count('reactions', filter=Q(reactions__reaction_type='like'))
         ).order_by('-created_at')
         
         comments_data = []
@@ -878,7 +1636,7 @@ class UserDB:
                 'comment_id': str(comment.comment_id),
                 'user': {
                     'user_id': str(comment.user.user_id),
-                    'user_name': comment.user.user_name,
+                    'user_name': comment.user.username,  # Map username to user_name for API response
                     'profile_picture_url': comment.user.profile_picture_url or ''
                 },
                 'description': comment.description,
@@ -938,27 +1696,162 @@ class UserDB:
         reaction.delete()
         return True
     
-    def get_verse(self):
+    def check_verse_reaction_exists(self, user_id: str, verse_id: str) -> Reaction | None:
         try:
-            verse = Verse.objects.order_by('-created_at').first()
+            return Reaction.objects.get(user__user_id=user_id, verse__verse_id=verse_id)
+        except Reaction.DoesNotExist:
+            return None
+        except (ValueError, TypeError):
+            return None
+    
+    def like_verse(self, verse_id: str, user_id: str) -> Reaction:    
+        try:
+            verse = Verse.objects.get(verse_id=verse_id)
+        except Verse.DoesNotExist:
+            raise Exception("Verse not found")
+        
+        existing_reaction = self.check_verse_reaction_exists(user_id, verse_id)
+        if existing_reaction:
+            raise Exception("You have already liked this verse")
+        
+        user = User.objects.get(user_id=user_id)
+        reaction = Reaction.objects.create(
+            user=user,
+            verse=verse,
+            reaction_type=Reaction.LIKE
+        )
+        return reaction
+    
+    def unlike_verse(self, verse_id: str, user_id: str) -> bool:
+        """Unlike a verse by deleting the user's reaction"""
+        try:
+            verse = Verse.objects.get(verse_id=verse_id)
+        except Verse.DoesNotExist:
+            raise Exception("Verse not found")
+        
+        existing_reaction = self.check_verse_reaction_exists(user_id, verse_id)
+        if not existing_reaction:
+            raise Exception("You haven't liked this verse")
+        
+        existing_reaction.delete()
+        return True
+    
+    def check_chapter_reaction_exists(self, user_id: str, chapter_id: str) -> Reaction | None:
+        """Check if user has already reacted to a chapter"""
+        try:
+            user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+            chapter_uuid = uuid.UUID(chapter_id) if isinstance(chapter_id, str) else chapter_id
+            return Reaction.objects.filter(
+                user__user_id=user_uuid,
+                chapter__chapter_id=chapter_uuid,
+                reaction_type=Reaction.LIKE
+            ).first()
+        except (ValueError, TypeError):
+            return None
+    
+    def like_chapter(self, chapter_id: str, user_id: str) -> Reaction:
+        """Like a chapter by creating a reaction"""
+        chapter_uuid = uuid.UUID(chapter_id) if isinstance(chapter_id, str) else chapter_id
+        user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+        
+        try:
+            chapter = Chapters.objects.get(chapter_id=chapter_uuid)
+        except Chapters.DoesNotExist:
+            raise Exception("Chapter not found")
+        
+        existing_reaction = self.check_chapter_reaction_exists(user_id, chapter_id)
+        if existing_reaction:
+            raise Exception("You have already liked this chapter")
+        
+        user = User.objects.get(user_id=user_uuid)
+        reaction = Reaction.objects.create(
+            user=user,
+            chapter=chapter,
+            reaction_type=Reaction.LIKE
+        )
+        return reaction
+    
+    def unlike_chapter(self, chapter_id: str, user_id: str) -> bool:
+        """Unlike a chapter by deleting the user's reaction"""
+        chapter_uuid = uuid.UUID(chapter_id) if isinstance(chapter_id, str) else chapter_id
+        
+        try:
+            chapter = Chapters.objects.get(chapter_id=chapter_uuid)
+        except Chapters.DoesNotExist:
+            raise Exception("Chapter not found")
+        
+        existing_reaction = self.check_chapter_reaction_exists(user_id, chapter_id)
+        if not existing_reaction:
+            raise Exception("You haven't liked this chapter")
+        
+        existing_reaction.delete()
+        return True
+    
+    def get_verse(self, user_id: str):
+        try:
+            verse = Verse.objects.annotate(
+                likes_count=Count('reactions', filter=Q(reactions__reaction_type='like'))
+            ).order_by('-created_at').first()
             
             if not verse:
                 return None
+            
+            # Check if user has liked this verse
+            is_liked = False
+            if user_id:
+                existing_reaction = self.check_verse_reaction_exists(user_id, str(verse.verse_id))
+                if existing_reaction:
+                    is_liked = True
             
             return {
                 'verse_id': str(verse.verse_id),
                 'title': verse.title or 'Quote of the day',
                 'description': verse.description or '',
+                'likes_count': verse.likes_count or 0,
+                'is_liked': is_liked,
                 'created_at': verse.created_at.isoformat(),
                 'updated_at': verse.updated_at.isoformat()
             }
         except Exception:
             return None
     
-    def clear_all_verses(self) -> int:
-        count = Verse.objects.count()
-        Verse.objects.all().delete()
-        return count
+    def get_all_verses_with_like_count(self, user_id: str = None):
+        try:
+            # Build queryset with like count annotation
+            verses_query = Verse.objects.annotate(
+                likes_count=Count('reactions', filter=Q(reactions__reaction_type='like'))
+            )
+            
+            # Add is_liked annotation if user_id provided
+            if user_id:
+                verses_query = verses_query.annotate(
+                    is_liked=Exists(
+                        Reaction.objects.filter(
+                            verse=OuterRef('verse_id'),
+                            user__user_id=user_id,
+                            reaction_type='like'
+                        )
+                    )
+                )
+            
+            verses = verses_query.order_by('-created_at')
+            
+            verses_data = []
+            for verse in verses:
+                verses_data.append({
+                    'verse_id': str(verse.verse_id),
+                    'title': verse.title or 'Quote of the day',
+                    'description': verse.description or '',
+                    'likes_count': verse.likes_count or 0,
+                    'is_liked': getattr(verse, 'is_liked', False),
+                    'created_at': verse.created_at.isoformat() if verse.created_at else None,
+                    'updated_at': verse.updated_at.isoformat() if verse.updated_at else None
+                })
+            
+            return verses_data
+        except Exception as e:
+            raise Exception(f"Failed to retrieve verses: {str(e)}")
+    
     
     def create_verse(self, title: str, description: str) -> Verse:
         verse = Verse.objects.create(
@@ -967,22 +1860,45 @@ class UserDB:
         )
         return verse
     
-    def create_promotion(self, title: str, description: str, price, redirect_link: str, meta_data: dict = None, media_id: str = None) -> Promotion:
-        media = None
-        if media_id:
-            try:
-                media_uuid = uuid.UUID(media_id) if isinstance(media_id, str) else media_id
-                media = Media.objects.get(media_id=media_uuid)
-            except Media.DoesNotExist:
-                raise Exception("Media not found")
-        
+    def get_verse_by_id(self, verse_id: str):
+        """Get verse by verse_id"""
+        try:
+            verse_uuid = uuid.UUID(verse_id) if isinstance(verse_id, str) else verse_id
+            return Verse.objects.get(verse_id=verse_uuid)
+        except (Verse.DoesNotExist, ValueError, TypeError):
+            return None
+    
+    def delete_verse(self, verse_id: str):
+        """Delete a verse by verse_id"""
+        try:
+            verse_uuid = uuid.UUID(verse_id) if isinstance(verse_id, str) else verse_id
+            verse = Verse.objects.get(verse_id=verse_uuid)
+            verse.delete()
+            return True
+        except (Verse.DoesNotExist, ValueError, TypeError) as e:
+            raise Exception(f"Verse not found: {str(e)}")
+    
+    def update_verse(self, verse_id: str, title: str = None, description: str = None):
+        """Update verse fields (all fields optional)"""
+        try:
+            verse_uuid = uuid.UUID(verse_id) if isinstance(verse_id, str) else verse_id
+            verse = Verse.objects.get(verse_id=verse_uuid)
+            if title is not None:
+                verse.title = title.strip() if title.strip() else None
+            if description is not None:
+                verse.description = description.strip() if description.strip() else None
+            verse.save()
+            return verse
+        except Verse.DoesNotExist:
+            raise Exception("Verse not found")
+    
+    def create_promotion(self, title: str, description: str, redirect_link: str, price=None, meta_data: dict = None) -> Promotion:
         promotion = Promotion.objects.create(
             title=title.strip(),
             description=description.strip() if description else '',
             price=price,
             redirect_link=redirect_link.strip(),
-            meta_data=meta_data,
-            media=media
+            meta_data=meta_data
         )
         return promotion
     
@@ -997,6 +1913,24 @@ class UserDB:
             )
             promotion_images.append(promotion_image)
         return promotion_images
+    
+    def get_promotion_by_id(self, promotion_id: str):
+        """Get promotion by promotion_id"""
+        try:
+            promotion_uuid = uuid.UUID(promotion_id) if isinstance(promotion_id, str) else promotion_id
+            return Promotion.objects.get(promotion_id=promotion_uuid)
+        except (Promotion.DoesNotExist, ValueError, TypeError):
+            return None
+    
+    def delete_promotion(self, promotion_id: str):
+        """Delete a promotion by promotion_id (CASCADE will delete related images)"""
+        try:
+            promotion_uuid = uuid.UUID(promotion_id) if isinstance(promotion_id, str) else promotion_id
+            promotion = Promotion.objects.get(promotion_id=promotion_uuid)
+            promotion.delete()
+            return True
+        except (Promotion.DoesNotExist, ValueError, TypeError) as e:
+            raise Exception(f"Promotion not found: {str(e)}")
     
     def create_category(self, category_name: str, cover_image_url: str = None, description: str = None, display_order: int = 0) -> Category:
         category = Category.objects.create(
@@ -1022,74 +1956,216 @@ class UserDB:
     def get_all_age_groups(self):
         return AgeGroup.objects.all().order_by('display_order', 'age_group_name')
     
-    def get_books_by_category_and_age_group(self, category_id: str, age_group_id: str, language_id: str = None):
-        queryset = Book.objects.filter(
-            category__category_id=category_id,
-            age_group__age_group_id=age_group_id,
-            is_active=True
-        )
-        
-        if language_id:
-            queryset = queryset.filter(language__language_id=language_id)
-        
-        return queryset.order_by('book_order', 'title')
+    def get_all_languages(self):
+        return Language.objects.all().order_by('language_name')
     
-    def get_book_by_id(self, book_id: str):
-        return Book.objects.select_related('category', 'age_group', 'language').get(book_id=book_id)
+    def get_all_books(self):
+        """Get all active books - accessible to all authenticated users"""
+        return Book.objects.filter(is_active=True).order_by('book_order', 'title')
     
-    def get_book_chapters(self, book_id: str):
-        return BookContent.objects.filter(book__book_id=book_id).order_by('content_order', 'chapter_number')
+    def get_category_by_id(self, category_id: str):
+        try:
+            return Category.objects.get(category_id=category_id)
+        except Category.DoesNotExist:
+            return None
     
-    def create_book(self, title: str, category_id: str, age_group_id: str, language_id: str,
-                   cover_image_url: str = None, description: str = None, author: str = None,
-                   book_order: int = 0, source_file_name: str = None, source_file_url: str = None,
-                   metadata: dict = None) -> Book:
+    def get_age_group_by_id(self, age_group_id: str):
+        try:
+            return AgeGroup.objects.get(age_group_id=age_group_id)
+        except AgeGroup.DoesNotExist:
+            return None
+    
+    def update_category(self, category_id: str, cover_image_url: str = None, description: str = None):
+        """Update category fields (all fields optional)"""
+        try:
+            category = Category.objects.get(category_id=category_id)
+            if cover_image_url is not None:
+                category.cover_image_url = cover_image_url
+            if description is not None:
+                category.description = description
+            category.save()
+            return category
+        except Category.DoesNotExist:
+            raise Exception("Category not found")
+    
+    def update_age_group(self, age_group_id: str, cover_image_url: str = None, description: str = None):
+        """Update age group fields (all fields optional)"""
+        try:
+            age_group = AgeGroup.objects.get(age_group_id=age_group_id)
+            if cover_image_url is not None:
+                age_group.cover_image_url = cover_image_url
+            if description is not None:
+                age_group.description = description
+            age_group.save()
+            return age_group
+        except AgeGroup.DoesNotExist:
+            raise Exception("Age group not found")
+    
+    def update_book(self, book_id: str, title: str = None, description: str = None, cover_image_url: str = None):
+        """Update book fields (all fields optional)"""
+        try:
+            book = Book.objects.get(book_id=book_id)
+            if title is not None:
+                book.title = title
+            if description is not None:
+                book.description = description
+            if cover_image_url is not None:
+                book.cover_image_url = cover_image_url
+            book.save()
+            return book
+        except Book.DoesNotExist:
+            raise Exception("Book not found")
+    
+    def get_language_by_id(self, language_id: str):
+        try:
+            return Language.objects.get(language_id=language_id)
+        except Language.DoesNotExist:
+            return None
+    
+    def create_book(self, title: str, category_id: str, age_group_id: str, language_id: str, 
+                    cover_image_url: str = None, description: str = None, book_order: int = 0) -> Book:
         category = Category.objects.get(category_id=category_id)
         age_group = AgeGroup.objects.get(age_group_id=age_group_id)
         language = Language.objects.get(language_id=language_id)
         
         book = Book.objects.create(
             title=title,
+            description=description or '',
             category=category,
             age_group=age_group,
             language=language,
             cover_image_url=cover_image_url,
-            description=description or '',
-            author=author or '',
-            book_order=book_order,
-            source_file_name=source_file_name,
-            source_file_url=source_file_url,
-            metadata=metadata or {}
+            book_order=book_order
         )
         return book
     
-    def create_book_content(self, book: Book, chapter_number: int, chapter_title: str,
-                           content: str, content_order: int, metadata: dict = None) -> BookContent:
-        book_content = BookContent.objects.create(
-            book=book,
-            chapter_number=chapter_number,
-            chapter_title=chapter_title,
-            content=content,
-            content_order=content_order,
-            metadata=metadata or {}
-        )
-        return book_content
+    def get_books_by_category_and_age_group(self, category_id: str, age_group_id: str):
+        return Book.objects.filter(
+            category__category_id=category_id,
+            age_group__age_group_id=age_group_id,
+            is_active=True
+        ).select_related('category', 'age_group', 'language').order_by('book_order', 'title')
     
-    def bulk_create_book_contents(self, book: Book, chapters_data: list) -> list:
-        book_contents = []
-        for chapter_data in chapters_data:
-            book_content = BookContent(
-                book=book,
-                chapter_number=chapter_data['chapter_number'],
-                chapter_title=chapter_data['chapter_title'],
-                content=chapter_data['content'],
-                content_order=chapter_data.get('content_order', chapter_data['chapter_number']),
-                metadata=chapter_data.get('metadata', {})
-            )
-            book_contents.append(book_content)
+    def get_book_by_id(self, book_id: str):
+        return Book.objects.select_related('category', 'age_group', 'language').get(book_id=book_id)
+    
+    def get_latest_chapter_books_by_age_group_in_segregate_bibles(self):
+        """Get latest chapter's book for each age group in SEGREGATE_BIBLES category"""
+        from bible_way.models.book_reading import CategoryChoices
         
-        BookContent.objects.bulk_create(book_contents)
-        return book_contents
+        # Get all age groups ordered by display_order
+        age_groups = AgeGroup.objects.all().order_by('display_order', 'age_group_name')
+        
+        result = []
+        for age_group in age_groups:
+            # Find latest chapter for this age group in SEGREGATE_BIBLES
+            latest_chapter = Chapters.objects.filter(
+                book__category__category_name=CategoryChoices.SEGREGATE_BIBLES,
+                book__age_group__age_group_id=age_group.age_group_id,
+                book__is_active=True
+            ).select_related('book', 'book__category', 'book__age_group').order_by('-created_at').first()
+            
+            age_group_data = {
+                "age_group_id": str(age_group.age_group_id),
+                "age_group_name": age_group.age_group_name,
+                "display_name": age_group.get_age_group_name_display(),
+                "book_id": None,
+                "cover_image_url": None,
+                "title": None
+            }
+            
+            if latest_chapter and latest_chapter.book:
+                book = latest_chapter.book
+                age_group_data.update({
+                    "book_id": str(book.book_id),
+                    "cover_image_url": get_presigned_url(book.cover_image_url) if book.cover_image_url else None,
+                    "title": book.title
+                })
+            
+            result.append(age_group_data)
+        
+        return result
+    
+    def get_book_chapters(self, book_id: str):
+        return Chapters.objects.filter(book_id=book_id).order_by('chapter_number')
+    
+    def get_max_chapter_number(self, book_id: str):
+        from django.db.models import Max
+        result = Chapters.objects.filter(book_id=book_id).aggregate(max_number=Max('chapter_number'))
+        return result['max_number'] if result['max_number'] is not None else 0
+    
+    def get_chapters_count(self, book_id: str):
+        return Chapters.objects.filter(book_id=book_id).count()
+    
+    def create_chapter(self, book_id: str, title: str, description: str, chapter_url: str, 
+                      chapter_number: int, metadata: dict = None, video_url: str = None) -> Chapters:
+        book = Book.objects.get(book_id=book_id)
+        chapter = Chapters.objects.create(
+            book=book,
+            title=title,
+            description=description or '',
+            chapter_url=chapter_url,
+            chapter_number=chapter_number,
+            metadata=metadata or {},
+            video_url=video_url
+        )
+        return chapter
+    
+    def get_chapter_by_id(self, chapter_id: str):
+        """Get chapter by chapter_id"""
+        try:
+            chapter_uuid = uuid.UUID(chapter_id) if isinstance(chapter_id, str) else chapter_id
+            return Chapters.objects.get(chapter_id=chapter_uuid)
+        except (Chapters.DoesNotExist, ValueError, TypeError):
+            return None
+    
+    def delete_chapter(self, chapter_id: str):
+        """Delete a chapter by chapter_id"""
+        try:
+            chapter_uuid = uuid.UUID(chapter_id) if isinstance(chapter_id, str) else chapter_id
+            chapter = Chapters.objects.get(chapter_id=chapter_uuid)
+            chapter.delete()
+            return True
+        except (Chapters.DoesNotExist, ValueError, TypeError) as e:
+            raise Exception(f"Chapter not found: {str(e)}")
+    
+    def bulk_delete_chapters(self, chapter_ids: list[str]) -> dict:
+        """Delete multiple chapters by chapter_ids"""
+        deleted_ids = []
+        failed_ids = []
+        errors = []
+        
+        for chapter_id in chapter_ids:
+            if not chapter_id or not str(chapter_id).strip():
+                failed_ids.append(str(chapter_id))
+                errors.append(f"Invalid chapter_id: {chapter_id}")
+                continue
+            
+            chapter_id = str(chapter_id).strip()
+            
+            try:
+                # Validate UUID format
+                chapter_uuid = uuid.UUID(chapter_id)
+                chapter = Chapters.objects.get(chapter_id=chapter_uuid)
+                chapter.delete()
+                deleted_ids.append(chapter_id)
+            except (Chapters.DoesNotExist, ValueError, TypeError) as e:
+                failed_ids.append(chapter_id)
+                if isinstance(e, Chapters.DoesNotExist):
+                    errors.append(f"Chapter not found: {chapter_id}")
+                else:
+                    errors.append(f"Invalid UUID format: {chapter_id}")
+            except Exception as e:
+                failed_ids.append(chapter_id)
+                errors.append(f"Error deleting chapter {chapter_id}: {str(e)}")
+        
+        return {
+            'deleted_count': len(deleted_ids),
+            'failed_count': len(failed_ids),
+            'deleted_ids': deleted_ids,
+            'failed_ids': failed_ids,
+            'errors': errors
+        }
     
     def update_book_parsed_status(self, book_id: str, total_chapters: int, parsed_at=None) -> Book:
         from django.utils import timezone
@@ -1102,3 +2178,302 @@ class UserDB:
             book.parsed_at = timezone.now()
         book.save()
         return book
+    
+    def create_highlight(self, user_id: str, book_id: str, chapter_id: str, 
+                        start_block_id: str = None, end_block_id: str = None,
+                        start_offset: str = None, end_offset: str = None, color: str = 'yellow') -> Highlight:
+        user = User.objects.get(user_id=user_id)
+        book = Book.objects.get(book_id=book_id)
+        chapter = Chapters.objects.get(chapter_id=chapter_id)
+        
+        highlight = Highlight.objects.create(
+            user=user,
+            book=book,
+            chapter=chapter,
+            start_block_id=start_block_id,
+            end_block_id=end_block_id,
+            start_offset=start_offset,
+            end_offset=end_offset,
+            color=color
+        )
+        return highlight
+    
+    def get_highlights_by_user_and_book(self, user_id: str, book_id: str):
+        return Highlight.objects.filter(
+            user__user_id=user_id,
+            book__book_id=book_id
+        ).select_related('user', 'book').order_by('-created_at')
+    
+    def get_highlight_by_id(self, highlight_id: str):
+        try:
+            return Highlight.objects.select_related('user', 'book').get(highlight_id=highlight_id)
+        except Highlight.DoesNotExist:
+            return None
+    
+    def delete_highlight(self, highlight_id: str, user_id: str):
+        highlight = Highlight.objects.get(highlight_id=highlight_id, user__user_id=user_id)
+        highlight.delete()
+        return True
+    
+    def create_reading_note(self, user_id: str, book_id: str, content: str,
+                           chapter_id: str = None, block_id: str = None) -> ReadingNote:
+        user = User.objects.get(user_id=user_id)
+        book = Book.objects.get(book_id=book_id)
+        
+        reading_note = ReadingNote.objects.create(
+            user=user,
+            book=book,
+            content=content,
+            chapter_id=chapter_id,
+            block_id=block_id.strip() if block_id else None
+        )
+        return reading_note
+    
+    def get_reading_notes_by_user_and_book(self, user_id: str, book_id: str):
+        return ReadingNote.objects.filter(
+            user__user_id=user_id,
+            book__book_id=book_id
+        ).select_related('user', 'book').order_by('-created_at')
+    
+    def get_reading_note_by_id(self, note_id: str):
+        try:
+            return ReadingNote.objects.select_related('user', 'book').get(note_id=note_id)
+        except ReadingNote.DoesNotExist:
+            return None
+    
+    def update_reading_note(self, note_id: str, user_id: str, content: str) -> ReadingNote:
+        note_uuid = uuid.UUID(note_id) if isinstance(note_id, str) else note_id
+        user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+        
+        try:
+            reading_note = ReadingNote.objects.get(note_id=note_uuid)
+        except ReadingNote.DoesNotExist:
+            raise Exception("Reading note not found")
+        
+        if reading_note.user.user_id != user_uuid:
+            raise Exception("You are not authorized to update this reading note")
+        
+        reading_note.content = content.strip()
+        reading_note.save()
+        return reading_note
+    
+    def delete_reading_note(self, note_id: str, user_id: str):
+        note_uuid = uuid.UUID(note_id) if isinstance(note_id, str) else note_id
+        user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+        
+        reading_note = ReadingNote.objects.get(note_id=note_uuid, user__user_id=user_uuid)
+        reading_note.delete()
+        return True
+    
+    def get_all_reading_notes_by_user(self, user_id: str):
+        return ReadingNote.objects.filter(
+            user__user_id=user_id
+        ).select_related('user', 'book').prefetch_related('book__chapters').order_by('book__title', '-created_at')
+    
+    def create_bookmark(self, user_id: str, book_id: str) -> Bookmark:
+        user = User.objects.get(user_id=user_id)
+        book = Book.objects.get(book_id=book_id)
+        
+        bookmark = Bookmark.objects.create(
+            user=user,
+            book=book
+        )
+        return bookmark
+    
+    def get_bookmarks_by_user(self, user_id: str):
+        return Bookmark.objects.filter(
+            user__user_id=user_id
+        ).select_related('user', 'book', 'book__category', 'book__age_group', 'book__language').order_by('-created_at')
+    
+    def get_bookmark_by_id(self, bookmark_id: str):
+        try:
+            return Bookmark.objects.select_related('user', 'book').get(bookmark_id=bookmark_id)
+        except Bookmark.DoesNotExist:
+            return None
+    
+    def get_bookmark_by_user_and_book(self, user_id: str, book_id: str):
+        try:
+            return Bookmark.objects.select_related('user', 'book').get(
+                user__user_id=user_id,
+                book__book_id=book_id
+            )
+        except Bookmark.DoesNotExist:
+            return None
+    
+    def delete_bookmark(self, bookmark_id: str, user_id: str):
+        bookmark_uuid = uuid.UUID(bookmark_id) if isinstance(bookmark_id, str) else bookmark_id
+        user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+        
+        bookmark = Bookmark.objects.get(bookmark_id=bookmark_uuid, user__user_id=user_uuid)
+        bookmark.delete()
+        return True
+    
+    def create_or_update_reading_progress(self, user_id: str, book_id: str, chapter_id: str = None, progress_percentage: float = 0.0, block_id: str = None) -> ReadingProgress:
+        from bible_way.models.book_reading import Chapters
+        
+        # Get Chapters instance if chapter_id is provided
+        chapter_instance = None
+        if chapter_id:
+            chapter_instance = Chapters.objects.get(chapter_id=chapter_id)
+        
+        # Try to get existing reading progress
+        try:
+            reading_progress = ReadingProgress.objects.get(
+                user__user_id=user_id,
+                book__book_id=book_id
+            )
+            
+            # Update with max of current and new progress
+            new_progress = max(float(reading_progress.progress_percentage), float(progress_percentage))
+            reading_progress.progress_percentage = new_progress
+            
+            # Update chapter_id if provided
+            if chapter_instance:
+                reading_progress.chapter_id = chapter_instance
+            
+            # Update block_id if provided
+            if block_id:
+                reading_progress.block_id = block_id.strip()
+            
+            reading_progress.save()
+            return reading_progress
+            
+        except ReadingProgress.DoesNotExist:
+            # Create new reading progress
+            user = User.objects.get(user_id=user_id)
+            book = Book.objects.get(book_id=book_id)
+            
+            reading_progress = ReadingProgress.objects.create(
+                user=user,
+                book=book,
+                progress_percentage=float(progress_percentage),
+                chapter_id=chapter_instance,
+                block_id=block_id.strip() if block_id else None
+            )
+            return reading_progress
+    
+    def get_reading_progress_by_user(self, user_id: str):
+        """Get all reading progress for a user, returns a dictionary mapping book_id to dict with progress_percentage, block_id, and chapter_id"""
+        user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+        
+        reading_progresses = ReadingProgress.objects.filter(
+            user__user_id=user_uuid
+        ).select_related('book', 'chapter_id')
+        
+        # Create a dictionary mapping book_id to dict with progress_percentage, block_id, and chapter_id
+        progress_dict = {}
+        for progress in reading_progresses:
+            progress_dict[str(progress.book.book_id)] = {
+                'progress_percentage': float(progress.progress_percentage),
+                'block_id': progress.block_id if progress.block_id else None,
+                'chapter_id': str(progress.chapter_id.chapter_id) if progress.chapter_id else None
+            }
+        
+        return progress_dict
+    
+    def get_reading_progress_by_user_and_book(self, user_id: str, book_id: str):
+        """Get reading progress for a specific user and book"""
+        try:
+            return ReadingProgress.objects.select_related('user', 'book', 'chapter_id').get(
+                user__user_id=user_id,
+                book__book_id=book_id
+            )
+        except ReadingProgress.DoesNotExist:
+            return None
+    
+    def get_top_reading_progress_books(self, user_id: str, limit: int = 2):
+        """Get top N books by reading progress for a user, ordered by progress_percentage DESC, then last_read_at DESC"""
+        user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+        
+        return ReadingProgress.objects.filter(
+            user__user_id=user_uuid
+        ).select_related(
+            'book', 
+            'book__category', 
+            'book__age_group', 
+            'book__language', 
+            'chapter_id'
+        ).order_by('-progress_percentage', '-last_read_at')[:limit]
+    
+    def _generate_unique_share_token(self) -> str:
+        """Generate a unique URL-safe token for share links."""
+        max_attempts = 10
+        for _ in range(max_attempts):
+            token = secrets.token_urlsafe(8)[:12]  # Generate 12-character URL-safe token
+            if not ShareLink.objects.filter(share_token=token).exists():
+                return token
+        raise Exception("Failed to generate unique share token after multiple attempts")
+    
+    def create_share_link(self, content_type: str, content_id: str, user_id: str) -> ShareLink:
+        """Create a share link for a post or profile."""
+        user_uuid = uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+        content_uuid = uuid.UUID(content_id) if isinstance(content_id, str) else content_id
+        
+        # Validate content_type
+        if content_type not in [ShareLinkContentTypeChoices.POST, ShareLinkContentTypeChoices.PROFILE]:
+            raise Exception("Invalid content_type. Must be 'POST' or 'PROFILE'")
+        
+        # Check if share link already exists for this content and user
+        existing_link = ShareLink.objects.filter(
+            content_type=content_type,
+            content_id=content_uuid,
+            created_by__user_id=user_uuid,
+            is_active=True
+        ).first()
+        
+        if existing_link:
+            return existing_link
+        
+        # Generate unique token
+        share_token = self._generate_unique_share_token()
+        
+        user = User.objects.get(user_id=user_uuid)
+        share_link = ShareLink.objects.create(
+            share_token=share_token,
+            content_type=content_type,
+            content_id=content_uuid,
+            created_by=user
+        )
+        return share_link
+    
+    def get_share_link_by_token(self, token: str) -> ShareLink | None:
+        """Get ShareLink by token. Returns None if not found or inactive."""
+        try:
+            share_link = ShareLink.objects.get(share_token=token, is_active=True)
+            return share_link
+        except ShareLink.DoesNotExist:
+            return None
+        except (ValueError, TypeError):
+            return None
+    
+    def get_post_by_share_token(self, token: str) -> Post | None:
+        """Get Post by share token. Returns None if token invalid or not for a POST."""
+        share_link = self.get_share_link_by_token(token)
+        if not share_link:
+            return None
+        
+        if share_link.content_type != ShareLinkContentTypeChoices.POST:
+            return None
+        
+        try:
+            post = Post.objects.select_related('user').prefetch_related('media').get(
+                post_id=share_link.content_id
+            )
+            return post
+        except Post.DoesNotExist:
+            return None
+    
+    def get_profile_by_share_token(self, token: str) -> User | None:
+        """Get User profile by share token. Returns None if token invalid or not for a PROFILE."""
+        share_link = self.get_share_link_by_token(token)
+        if not share_link:
+            return None
+        
+        if share_link.content_type != ShareLinkContentTypeChoices.PROFILE:
+            return None
+        
+        try:
+            user = User.objects.get(user_id=share_link.content_id)
+            return user
+        except User.DoesNotExist:
+            return None

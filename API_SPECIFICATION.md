@@ -282,7 +282,240 @@ Authorization: Bearer <access_token>
 
 ---
 
-### 2.3 Search Users
+### 2.3 Get Complete User Profile
+**Endpoint:** `POST /user/profile/complete`  
+**Authentication:** Required (JWT)
+
+**Request Body:**
+```json
+{
+  "user_id": "string (required)",
+  "current_user": "string (optional) - User ID of the authenticated user (for is_following field)"
+}
+```
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "User profile retrieved successfully",
+  "data": {
+    "user_id": "string",
+    "user_name": "string",
+    "email": "string",
+    "country": "string",
+    "age": "integer",
+    "preferred_language": "string",
+    "profile_picture_url": "string",
+    "is_admin": "boolean",
+    "followers_count": "integer",
+    "following_count": "integer",
+    "is_following": "boolean",
+    "conversation_id": "string|null"
+  }
+}
+```
+
+**Response Fields:**
+- `user_id` (string) - Unique user identifier
+- `user_name` (string) - Username
+- `email` (string) - User email
+- `country` (string) - User country
+- `age` (integer) - User age
+- `preferred_language` (string) - User's preferred language
+- `profile_picture_url` (string) - URL to user's profile picture
+- `is_admin` (boolean) - Whether the user is an admin
+- `followers_count` (integer) - Number of followers
+- `following_count` (integer) - Number of users this user is following
+- `is_following` (boolean) - Whether the `current_user` is following this user (only included if `current_user` is provided)
+- `conversation_id` (string|null) - The ID of the DIRECT conversation between the authenticated user and this user. Returns `null` if no conversation exists yet
+
+**Error Responses:**
+
+- **400 Bad Request** - Validation error:
+```json
+{
+  "success": false,
+  "error": "user_id is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Invalid current_user:
+```json
+{
+  "success": false,
+  "error": "Invalid current_user",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **404 Not Found:**
+```json
+{
+  "success": false,
+  "error": "User not found",
+  "error_code": "USER_NOT_FOUND"
+}
+```
+
+---
+
+### 2.4 Update User Profile
+**Endpoint:** `POST /user/profile/update`  
+**Authentication:** Required (JWT)
+
+**Description:**  
+Update the authenticated user's profile information. All fields are optional, but at least one field must be provided. Users can only update their own profile.
+
+**Request Body:**
+```json
+{
+  "username": "string (optional)",
+  "preferred_language": "string (optional)",
+  "age": "integer (optional)",
+  "country": "string (optional)",
+  "profile_picture": "file (optional)"
+}
+```
+
+**Example Request:**
+```json
+{
+  "username": "new_username",
+  "preferred_language": "English",
+  "age": 28,
+  "country": "United States"
+}
+```
+
+**Note:** 
+- All fields are optional, but at least one field must be provided
+- `username` must be unique across all users (excluding the current user)
+- `username` must be 3-150 characters long and contain only letters, numbers, underscores, and hyphens
+- If `username` is provided and already taken by another user, the update will fail
+- Users can provide their current username (no change will occur)
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "profile_updated_successfully"
+}
+```
+
+**Error Responses:**
+
+- **401 Unauthorized** - Missing or invalid token:
+```json
+{
+  "detail": "Authentication credentials were not provided."
+}
+```
+
+- **400 Bad Request** - No fields provided:
+```json
+{
+  "success": false,
+  "error": "At least one field must be provided to update",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Invalid age:
+```json
+{
+  "success": false,
+  "error": "Age must be between 1 and 150",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Invalid preferred_language:
+```json
+{
+  "success": false,
+  "error": "Preferred language must be between 2 and 50 characters",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Username already taken:
+```json
+{
+  "success": false,
+  "error": "Username is already taken",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Invalid username format:
+```json
+{
+  "success": false,
+  "error": "Username can only contain letters, numbers, underscores, and hyphens",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Username too short:
+```json
+{
+  "success": false,
+  "error": "Username must be at least 3 characters long",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Username too long:
+```json
+{
+  "success": false,
+  "error": "Username must be less than 150 characters",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Invalid country:
+```json
+{
+  "success": false,
+  "error": "Country must be between 2 and 100 characters",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **404 Not Found** - User not found:
+```json
+{
+  "success": false,
+  "error": "User not found",
+  "error_code": "USER_NOT_FOUND"
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to update profile: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Notes:**
+- All fields are optional (partial update supported)
+- At least one field must be provided in the request
+- Users can only update their own profile (based on JWT token)
+- Username is NOT updatable through this endpoint
+- Empty strings are treated as null (field will not be updated)
+- Age must be a valid integer between 1 and 150
+- Preferred language must be between 2 and 50 characters
+- Country must be between 2 and 100 characters
+
+---
+
+### 2.5 Search Users
 **Endpoint:** `GET /user/search`  
 **Authentication:** Required (JWT)
 
@@ -383,6 +616,108 @@ Authorization: Bearer <access_token>
 - Maximum 50 results can be returned per request
 - The `is_following` field indicates the follow relationship from the authenticated user to each result
 - Empty search queries (less than 2 characters) return empty results
+
+---
+
+### 2.6 Get Recommended Users
+**Endpoint:** `GET /user/recommended` or `POST /user/recommended`  
+**Authentication:** Required (JWT)
+
+**Description:**
+Get recommended users for a specific user. Returns users that the specified user is not already following, ordered by follower count (most popular first). Excludes the user themselves.
+
+**Request Parameters:**
+
+For **GET** requests:
+- `user_id` (string, required) - Query parameter: The user ID to get recommendations for
+- `limit` (integer, optional) - Query parameter: Maximum number of results (default: 20, maximum: 20)
+
+For **POST** requests:
+- `user_id` (string, required) - Request body: The user ID to get recommendations for
+- `limit` (integer, optional) - Request body: Maximum number of results (default: 20, maximum: 20)
+
+**Example GET Request:**
+```
+GET /user/recommended?user_id=abc-123-uuid&limit=20
+Authorization: Bearer <access_token>
+```
+
+**Example POST Request:**
+```
+POST /user/recommended
+Authorization: Bearer <access_token>
+Content-Type: application/json
+
+{
+  "user_id": "abc-123-uuid",
+  "limit": 20
+}
+```
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "user_id": "def-456-uuid",
+      "user_name": "john_doe",
+      "profile_image": "https://s3.amazonaws.com/bucket/profile.jpg"
+    },
+    {
+      "user_id": "ghi-789-uuid",
+      "user_name": "jane_smith",
+      "profile_image": ""
+    }
+  ],
+  "total_count": 45
+}
+```
+
+**Response Fields:**
+- `success` (boolean) - Indicates if the request was successful
+- `data` (array) - Array of recommended user objects
+  - `user_id` (string) - Unique user identifier
+  - `user_name` (string) - Username
+  - `profile_image` (string) - URL to user's profile picture (empty string if not set)
+- `total_count` (integer) - Total number of recommended users available (may be more than returned results)
+
+**Error Responses:**
+
+- **400 Bad Request** - Validation error:
+```json
+{
+  "success": false,
+  "error": "user_id is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **404 Not Found** - User not found:
+```json
+{
+  "success": false,
+  "error": "User not found",
+  "error_code": "USER_NOT_FOUND"
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to get recommended users: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Notes:**
+- Results exclude users that the specified user is already following
+- Results exclude the user themselves
+- Results are ordered by follower count (descending), then by username (ascending)
+- Maximum 20 results can be returned per request
+- If `limit` is less than 1 or greater than 20, it defaults to 20
+- If `limit` is not provided or invalid, it defaults to 20
 
 ---
 
@@ -737,6 +1072,109 @@ Authorization: Bearer <access_token>
   "success": false,
   "error": "Offset must be greater than or equal to 0",
   "error_code": "VALIDATION_ERROR"
+}
+```
+
+---
+
+### 4.7 Get Specific User's Posts
+**Endpoint:** `POST /post/user`  
+**Authentication:** Required (JWT)
+
+**Request Body:**
+```json
+{
+  "user_id": "string (required)"
+}
+```
+
+**Query Parameters:**
+- `limit` (integer, optional, default: 10) - Number of posts to return
+- `offset` (integer, optional, default: 0) - Number of posts to skip
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "User posts retrieved successfully",
+  "data": [
+    {
+      "post_id": "uuid-string",
+      "title": "string",
+      "description": "string",
+      "media": [
+        {
+          "media_id": "uuid-string",
+          "media_type": "image|video|audio",
+          "url": "string"
+        }
+      ],
+      "likes_count": 5,
+      "comments_count": 3,
+      "is_liked": true,
+      "is_commented": false,
+      "created_at": "2024-01-01T12:00:00",
+      "updated_at": "2024-01-01T12:00:00"
+    }
+  ],
+  "pagination": {
+    "limit": 10,
+    "offset": 0,
+    "total_count": 25,
+    "has_next": true,
+    "has_previous": false
+  }
+}
+```
+
+**Note:** 
+- `is_liked`: Indicates if the current authenticated user has liked this post
+- `is_commented`: Indicates if the current authenticated user has commented on this post
+
+**Error Responses:**
+
+- **400 Bad Request** - Validation error:
+```json
+{
+  "success": false,
+  "error": "user_id is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **404 Not Found** - User not found:
+```json
+{
+  "success": false,
+  "error": "User not found",
+  "error_code": "USER_NOT_FOUND"
+}
+```
+
+- **400 Bad Request** - Invalid limit:
+```json
+{
+  "success": false,
+  "error": "Limit must be greater than 0",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Invalid offset:
+```json
+{
+  "success": false,
+  "error": "Offset must be greater than or equal to 0",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to retrieve user posts: <error_message>",
+  "error_code": "INTERNAL_ERROR"
 }
 ```
 
@@ -1169,8 +1607,10 @@ Authorization: Bearer <access_token>
 **Request Body:**
 ```json
 {
-  "title": "string (required)",
-  "description": "string (required)"
+  "name": "string (required)",
+  "email": "string (required)",
+  "description": "string (required)",
+  "phone_number": "string (optional)"
 }
 ```
 
@@ -1189,7 +1629,25 @@ Authorization: Bearer <access_token>
 ```json
 {
   "success": false,
-  "error": "Title is required",
+  "error": "Name is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Email required:
+```json
+{
+  "success": false,
+  "error": "Email is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Description required:
+```json
+{
+  "success": false,
+  "error": "Description is required",
   "error_code": "VALIDATION_ERROR"
 }
 ```
@@ -1198,6 +1656,15 @@ Authorization: Bearer <access_token>
 ```json
 {
   "detail": "Authentication credentials were not provided."
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to create prayer request: <error_message>",
+  "error_code": "INTERNAL_ERROR"
 }
 ```
 
@@ -1211,7 +1678,9 @@ Authorization: Bearer <access_token>
 ```json
 {
   "prayer_request_id": "uuid-string (required)",
-  "title": "string (optional)",
+  "name": "string (optional)",
+  "email": "string (optional)",
+  "phone_number": "string (optional)",
   "description": "string (optional)"
 }
 ```
@@ -1326,7 +1795,9 @@ Authorization: Bearer <access_token>
         "user_name": "string",
         "profile_picture_url": "string"
       },
-      "title": "string",
+      "name": "string",
+      "email": "string",
+      "phone_number": "string",
       "description": "string",
       "comments_count": 5,
       "reactions_count": 10,
@@ -1366,7 +1837,191 @@ Authorization: Bearer <access_token>
 
 ---
 
-### 8.5 Create Comment on Prayer Request
+### 8.5 Get User's Prayer Requests
+**Endpoint:** `GET /prayer-request/user/me`  
+**Authentication:** Required (JWT)
+
+**Query Parameters:**
+- `limit` (integer, optional, default: 10) - Number of prayer requests to return
+- `offset` (integer, optional, default: 0) - Number of prayer requests to skip
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Prayer requests retrieved successfully",
+  "data": [
+    {
+      "prayer_request_id": "uuid-string",
+      "user": {
+        "user_id": "uuid-string",
+        "user_name": "string",
+        "profile_picture_url": "string"
+      },
+      "name": "string",
+      "email": "string",
+      "phone_number": "string",
+      "description": "string",
+      "comments_count": 5,
+      "reactions_count": 10,
+      "is_liked": true,
+      "created_at": "2024-01-01T12:00:00",
+      "updated_at": "2024-01-01T12:00:00"
+    }
+  ],
+  "pagination": {
+    "limit": 10,
+    "offset": 0,
+    "total_count": 25,
+    "has_next": true,
+    "has_previous": false
+  }
+}
+```
+
+**Note:** 
+- `is_liked`: Indicates if the current authenticated user has liked this prayer request
+
+**Error Responses:**
+
+- **401 Unauthorized** - Missing or invalid token:
+```json
+{
+  "detail": "Authentication credentials were not provided."
+}
+```
+
+- **400 Bad Request** - Invalid limit:
+```json
+{
+  "success": false,
+  "error": "Limit must be greater than 0",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Invalid offset:
+```json
+{
+  "success": false,
+  "error": "Offset must be greater than or equal to 0",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to retrieve prayer requests: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+---
+
+### 8.6 Get Specific User's Prayer Requests
+**Endpoint:** `POST /prayer-request/user`  
+**Authentication:** Required (JWT)
+
+**Request Body:**
+```json
+{
+  "user_id": "string (required)"
+}
+```
+
+**Query Parameters:**
+- `limit` (integer, optional, default: 10) - Number of prayer requests to return
+- `offset` (integer, optional, default: 0) - Number of prayer requests to skip
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Prayer requests retrieved successfully",
+  "data": [
+    {
+      "prayer_request_id": "uuid-string",
+      "user": {
+        "user_id": "uuid-string",
+        "user_name": "string",
+        "profile_picture_url": "string"
+      },
+      "name": "string",
+      "email": "string",
+      "phone_number": "string",
+      "description": "string",
+      "comments_count": 5,
+      "reactions_count": 10,
+      "is_liked": true,
+      "created_at": "2024-01-01T12:00:00",
+      "updated_at": "2024-01-01T12:00:00"
+    }
+  ],
+  "pagination": {
+    "limit": 10,
+    "offset": 0,
+    "total_count": 25,
+    "has_next": true,
+    "has_previous": false
+  }
+}
+```
+
+**Note:** 
+- `is_liked`: Indicates if the current authenticated user has liked this prayer request
+
+**Error Responses:**
+
+- **400 Bad Request** - Validation error:
+```json
+{
+  "success": false,
+  "error": "user_id is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **404 Not Found** - User not found:
+```json
+{
+  "success": false,
+  "error": "User not found",
+  "error_code": "USER_NOT_FOUND"
+}
+```
+
+- **400 Bad Request** - Invalid limit:
+```json
+{
+  "success": false,
+  "error": "Limit must be greater than 0",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Invalid offset:
+```json
+{
+  "success": false,
+  "error": "Offset must be greater than or equal to 0",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to retrieve prayer requests: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+---
+
+### 8.7 Create Comment on Prayer Request
 **Endpoint:** `POST /prayer-request/comment/create`  
 **Authentication:** Required (JWT)
 
@@ -1409,7 +2064,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-### 8.6 Get Comments for Prayer Request
+### 8.8 Get Comments for Prayer Request
 **Endpoint:** `GET /prayer-request/comment/details/<prayer_request_id>/v1`  
 **Authentication:** Required (JWT)
 
@@ -1461,7 +2116,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-### 8.7 Like Prayer Request
+### 8.9 Like Prayer Request
 **Endpoint:** `POST /prayer-request/reaction/like`  
 **Authentication:** Required (JWT)
 
@@ -1505,7 +2160,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-### 8.8 Unlike Prayer Request
+### 8.10 Unlike Prayer Request
 **Endpoint:** `POST /prayer-request/reaction/unlike`  
 **Authentication:** Required (JWT)
 
@@ -1587,6 +2242,229 @@ Authorization: Bearer <access_token>
 
 ---
 
+### 9.2 Get All Verses
+**Endpoint:** `GET /verse/all`  
+**Authentication:** Required (JWT)
+
+**Description:**
+This endpoint retrieves all verses with their like counts. For authenticated users, it also includes whether the user has liked each verse.
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Verses retrieved successfully",
+  "data": [
+    {
+      "verse_id": "uuid-string",
+      "title": "Quote of the day",
+      "description": "string",
+      "likes_count": 15,
+      "is_liked": true,
+      "created_at": "2024-01-01T12:00:00",
+      "updated_at": "2024-01-01T12:00:00"
+    }
+  ],
+  "total_count": 10
+}
+```
+
+**Response Fields:**
+- `verse_id` (string) - Unique verse identifier
+- `title` (string) - Verse title (default: "Quote of the day")
+- `description` (string) - Verse description/content
+- `likes_count` (integer) - Number of likes for this verse
+- `is_liked` (boolean) - Whether the authenticated user has liked this verse
+- `created_at` (string) - Creation timestamp in ISO 8601 format
+- `updated_at` (string) - Last update timestamp in ISO 8601 format
+- `total_count` (integer) - Total number of verses
+
+**Error Responses:**
+
+- **401 Unauthorized** - Missing or invalid token:
+```json
+{
+  "detail": "Authentication credentials were not provided."
+}
+```
+
+- **400 Bad Request** - User not found (if user_id validation fails):
+```json
+{
+  "success": false,
+  "error": "User not found",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to retrieve verses: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Notes:**
+- Verses are ordered by creation date (newest first)
+- The `is_liked` field indicates if the authenticated user has liked each verse
+- All verses are returned (no pagination)
+
+---
+
+### 9.3 Like Verse
+**Endpoint:** `POST /verse/like`  
+**Authentication:** Required (JWT)
+
+**Description:**
+Allows an authenticated user to like a verse. Each user can only like a verse once.
+
+**Request Body:**
+```json
+{
+  "verse_id": "uuid-string (required)"
+}
+```
+
+**Success Response (201 Created):**
+```json
+{
+  "success": true,
+  "message": "Verse liked successfully",
+  "reaction_id": "uuid-string",
+  "verse_id": "uuid-string",
+  "reaction_type": "like"
+}
+```
+
+**Error Responses:**
+
+- **401 Unauthorized** - Missing or invalid token:
+```json
+{
+  "detail": "Authentication credentials were not provided."
+}
+```
+
+- **400 Bad Request** - Missing verse_id:
+```json
+{
+  "success": false,
+  "error": "Verse ID is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **404 Not Found** - Verse not found:
+```json
+{
+  "success": false,
+  "error": "Verse not found",
+  "error_code": "VERSE_NOT_FOUND"
+}
+```
+
+- **400 Bad Request** - Already liked:
+```json
+{
+  "success": false,
+  "error": "You have already liked this verse",
+  "error_code": "ALREADY_LIKED"
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to like verse: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Notes:**
+- A user can only like a verse once
+- The like count is updated automatically
+- The reaction is stored with the user and verse relationship
+
+---
+
+### 9.4 Unlike Verse
+**Endpoint:** `POST /verse/unlike`  
+**Authentication:** Required (JWT)
+
+**Description:**
+Allows an authenticated user to remove their like from a verse.
+
+**Request Body:**
+```json
+{
+  "verse_id": "uuid-string (required)"
+}
+```
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Verse unliked successfully",
+  "verse_id": "uuid-string"
+}
+```
+
+**Error Responses:**
+
+- **401 Unauthorized** - Missing or invalid token:
+```json
+{
+  "detail": "Authentication credentials were not provided."
+}
+```
+
+- **400 Bad Request** - Missing verse_id:
+```json
+{
+  "success": false,
+  "error": "Verse ID is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **404 Not Found** - Verse not found:
+```json
+{
+  "success": false,
+  "error": "Verse not found",
+  "error_code": "VERSE_NOT_FOUND"
+}
+```
+
+- **400 Bad Request** - Not liked:
+```json
+{
+  "success": false,
+  "error": "You haven't liked this verse",
+  "error_code": "NOT_LIKED"
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to unlike verse: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Notes:**
+- User must have previously liked the verse to unlike it
+- The like count is decremented automatically
+- User can like the verse again after unliking
+
+---
+
 ## 10. Admin APIs
 
 ### 10.1 Admin Create Verse
@@ -1602,7 +2480,7 @@ Authorization: Bearer <access_token>
 }
 ```
 
-**Note:** This endpoint clears all existing verses before creating a new one (24-hour clearing mechanism).
+**Note:** This endpoint creates a new verse. Existing verses are not automatically deleted. To remove old verses, use the delete endpoint.
 
 **Success Response (201 Created):**
 ```json
@@ -1686,6 +2564,2062 @@ Authorization: Bearer <access_token>
 
 ---
 
+### 10.3 Admin Create Category
+**Endpoint:** `POST /admin/category/create`  
+**Authentication:** Required (JWT)  
+**Permission:** Admin only (`is_staff=True`)  
+**Content-Type:** `multipart/form-data`
+
+**Request Body (Form Data):**
+- `category_name` (string, required) - Category name (must be a valid CategoryChoices value)
+- `cover_image` (file, optional) - Cover image file for the category
+- `description` (string, optional) - Category description
+- `display_order` (integer, optional, default: 0) - Display order for sorting categories
+
+**Success Response (201 Created):**
+```json
+{
+  "success": true,
+  "message": "Category created successfully",
+  "data": {
+    "category_id": "uuid-string",
+    "category_name": "SEGREGATE_BIBLES",
+    "display_name": "Segregated Bibles",
+    "cover_image_url": "https://s3.amazonaws.com/bucket/categories/cover_images/...",
+    "description": "Bibles with age-specific content",
+    "display_order": 0,
+    "created_at": "2024-01-15T10:30:00Z",
+    "updated_at": "2024-01-15T10:30:00Z"
+  }
+}
+```
+
+**Error Responses:**
+
+- **403 Forbidden** - Not admin:
+```json
+{
+  "detail": "You do not have permission to perform this action."
+}
+```
+
+- **400 Bad Request** - Validation error:
+```json
+{
+  "success": false,
+  "error": "Category name is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Invalid category name:
+```json
+{
+  "success": false,
+  "error": "Invalid category name. Must be one of: SEGREGATE_BIBLES, ...",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Category already exists:
+```json
+{
+  "success": false,
+  "error": "Category 'SEGREGATE_BIBLES' already exists",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **500 Internal Server Error** - S3 upload error:
+```json
+{
+  "success": false,
+  "error": "Failed to upload cover image: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+---
+
+### 10.4 Admin Get Categories
+**Endpoint:** `GET /admin/categories`  
+**Authentication:** Required (JWT)  
+**Permission:** Admin only (`is_staff=True`)
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Categories retrieved successfully",
+  "data": [
+    {
+      "category_id": "uuid-string",
+      "category_name": "SEGREGATE_BIBLES",
+      "display_name": "Segregated Bibles",
+      "cover_image_url": "https://s3.amazonaws.com/bucket/categories/cover_images/...",
+      "description": "Bibles with age-specific content",
+      "display_order": 0,
+      "created_at": "2024-01-15T10:30:00Z",
+      "updated_at": "2024-01-15T10:30:00Z"
+    }
+  ]
+}
+```
+
+**Error Responses:**
+
+- **403 Forbidden** - Not admin:
+```json
+{
+  "detail": "You do not have permission to perform this action."
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to retrieve categories: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+---
+
+### 10.5 Admin Create Age Group
+**Endpoint:** `POST /admin/age-group/create`  
+**Authentication:** Required (JWT)  
+**Permission:** Admin only (`is_staff=True`)  
+**Content-Type:** `multipart/form-data`
+
+**Request Body (Form Data):**
+- `age_group_name` (string, required) - Age group name (must be a valid AgeGroupChoices value)
+- `cover_image` (file, optional) - Cover image file for the age group
+- `description` (string, optional) - Age group description
+- `display_order` (integer, optional, default: 0) - Display order for sorting age groups
+
+**Success Response (201 Created):**
+```json
+{
+  "success": true,
+  "message": "Age group created successfully",
+  "data": {
+    "age_group_id": "uuid-string",
+    "age_group_name": "CHILD",
+    "display_name": "Child",
+    "cover_image_url": "https://s3.amazonaws.com/bucket/age_groups/cover_images/...",
+    "description": "Books for children",
+    "display_order": 0,
+    "created_at": "2024-01-15T10:30:00Z",
+    "updated_at": "2024-01-15T10:30:00Z"
+  }
+}
+```
+
+**Error Responses:**
+
+- **403 Forbidden** - Not admin:
+```json
+{
+  "detail": "You do not have permission to perform this action."
+}
+```
+
+- **400 Bad Request** - Validation error:
+```json
+{
+  "success": false,
+  "error": "Age group name is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **500 Internal Server Error** - S3 upload error:
+```json
+{
+  "success": false,
+  "error": "Failed to upload cover image: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+---
+
+### 10.6 Admin Get Age Groups
+**Endpoint:** `GET /admin/age-groups`  
+**Authentication:** Required (JWT)  
+**Permission:** Admin only (`is_staff=True`)
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Age groups retrieved successfully",
+  "data": [
+    {
+      "age_group_id": "uuid-string",
+      "age_group_name": "CHILD",
+      "display_name": "Child",
+      "cover_image_url": "https://s3.amazonaws.com/bucket/age_groups/cover_images/...",
+      "description": "Books for children",
+      "display_order": 0,
+      "created_at": "2024-01-15T10:30:00Z",
+      "updated_at": "2024-01-15T10:30:00Z"
+    }
+  ]
+}
+```
+
+**Error Responses:**
+
+- **403 Forbidden** - Not admin:
+```json
+{
+  "detail": "You do not have permission to perform this action."
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to retrieve age groups: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+---
+
+### 10.7 Admin Get Languages
+**Endpoint:** `GET /admin/languages`  
+**Authentication:** Required (JWT)  
+**Permission:** Admin only (`is_staff=True`)
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Languages retrieved successfully",
+  "data": [
+    {
+      "language_id": "uuid-string",
+      "language_name": "ENGLISH",
+      "display_name": "English",
+      "created_at": "2024-01-15T10:30:00Z",
+      "updated_at": "2024-01-15T10:30:00Z"
+    }
+  ]
+}
+```
+
+**Error Responses:**
+
+- **403 Forbidden** - Not admin:
+```json
+{
+  "detail": "You do not have permission to perform this action."
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to retrieve languages: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+---
+
+### 10.8 Admin Create Book
+**Endpoint:** `POST /admin/book/create`  
+**Authentication:** Required (JWT)  
+**Permission:** Admin only (`is_staff=True`)  
+**Content-Type:** `multipart/form-data`
+
+**Request Body (Form Data):**
+- `title` (string, required) - Book title
+- `category` (string, required) - Category ID (UUID)
+- `agegroup` (string, required) - Age group ID (UUID)
+- `language` (string, required) - Language ID (UUID)
+- `cover_image` (file, optional) - Cover image file for the book
+- `description` (string, optional) - Book description
+
+**Success Response (201 Created):**
+```json
+{
+  "success": true,
+  "message": "Book created successfully",
+  "book_id": "uuid-string"
+}
+```
+
+**Error Responses:**
+
+- **403 Forbidden** - Not admin:
+```json
+{
+  "detail": "You do not have permission to perform this action."
+}
+```
+
+- **400 Bad Request** - Validation error:
+```json
+{
+  "success": false,
+  "error": "Title is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Missing required field:
+```json
+{
+  "success": false,
+  "error": "Category is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Invalid category/age group/language:
+```json
+{
+  "success": false,
+  "error": "Category with id '<category_id>' does not exist",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **500 Internal Server Error** - S3 upload error:
+```json
+{
+  "success": false,
+  "error": "Failed to upload cover image: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+---
+
+### 10.9 Admin Create Chapters
+**Endpoint:** `POST /admin/book/chapters/create`  
+**Authentication:** Required (JWT)  
+**Permission:** Admin only (`is_staff=True`)  
+**Content-Type:** `multipart/form-data`
+
+**Request Body (Form Data):**
+- `book_id` (string, required) - Book UUID
+- `bookdata` (JSON string, required) - Array of chapter objects:
+  ```json
+  [
+    {
+      "title": "string (required)",
+      "description": "string (required)",
+      "metadata": {} // optional JSON object per chapter
+    }
+  ]
+  ```
+- `file_0`, `file_1`, `file_2`, ... (files, required) - Files indexed to match bookdata array order
+
+**Note:** Files are sent as separate fields (`file_0`, `file_1`, etc.) and matched by index to the bookdata array.
+
+**Success Response (201 Created):**
+```json
+{
+  "success": true,
+  "message": "Chapters uploaded successfully",
+  "chaptersCount": 3,
+  "book_id": "uuid-string"
+}
+```
+
+**Error Responses:**
+
+- **403 Forbidden** - Not admin:
+```json
+{
+  "detail": "You do not have permission to perform this action."
+}
+```
+
+- **400 Bad Request** - Validation error:
+```json
+{
+  "success": false,
+  "error": "Book ID is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Invalid JSON:
+```json
+{
+  "success": false,
+  "error": "Invalid JSON format for bookdata",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Book not found:
+```json
+{
+  "success": false,
+  "error": "Book with id '<book_id>' does not exist",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Missing chapter fields:
+```json
+{
+  "success": false,
+  "error": "Title is required for chapter at index 0",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - File count mismatch:
+```json
+{
+  "success": false,
+  "error": "Number of files (2) must match number of chapters (3)",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **500 Internal Server Error** - S3 upload error:
+```json
+{
+  "success": false,
+  "error": "Failed to upload file for chapter at index 0: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+---
+
+### 10.10 Admin Delete Chapter
+**Endpoint:** `DELETE /admin/book/chapter/delete`  
+**Authentication:** Required (JWT)  
+**Permission:** Admin only (`is_staff=True`)
+
+**Request Body:**
+```json
+{
+  "chapter_id": "string (required) - UUID of the chapter to delete"
+}
+```
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Chapter deleted successfully",
+  "chapter_id": "uuid-string"
+}
+```
+
+**Error Responses:**
+
+- **403 Forbidden** - Not admin:
+```json
+{
+  "detail": "You do not have permission to perform this action."
+}
+```
+
+- **400 Bad Request** - Validation error:
+```json
+{
+  "success": false,
+  "error": "chapter_id is required in request body",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **404 Not Found** - Chapter not found:
+```json
+{
+  "success": false,
+  "error": "Chapter not found",
+  "error_code": "CHAPTER_NOT_FOUND"
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to delete chapter: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+---
+
+### 10.11 Admin Bulk Delete Chapters
+**Endpoint:** `POST /admin/book/chapter/bulk-delete`  
+**Authentication:** Required (JWT)  
+**Permission:** Admin only (`is_staff=True`)
+
+**Request Body:**
+```json
+{
+  "chapter_ids": [
+    "uuid-string-1",
+    "uuid-string-2",
+    "uuid-string-3"
+  ]
+}
+```
+
+**Description:**  
+Delete multiple chapters in a single request. The endpoint processes all chapter IDs and returns a summary of successful and failed deletions.
+
+**Success Response (200 OK) - All Deleted:**
+```json
+{
+  "success": true,
+  "message": "Chapters deleted successfully",
+  "deleted_count": 3,
+  "deleted_ids": ["uuid-string-1", "uuid-string-2", "uuid-string-3"],
+  "failed_count": 0,
+  "failed_ids": [],
+  "errors": []
+}
+```
+
+**Success Response (200 OK) - Partial Success:**
+```json
+{
+  "success": true,
+  "message": "Chapters deleted with some failures",
+  "deleted_count": 2,
+  "deleted_ids": ["uuid-string-1", "uuid-string-2"],
+  "failed_count": 1,
+  "failed_ids": ["uuid-string-3"],
+  "errors": ["Chapter not found: uuid-string-3"]
+}
+```
+
+**Response Fields:**
+- `deleted_count` (integer) - Number of chapters successfully deleted
+- `deleted_ids` (array) - Array of chapter IDs that were successfully deleted
+- `failed_count` (integer) - Number of chapters that failed to delete
+- `failed_ids` (array) - Array of chapter IDs that failed to delete
+- `errors` (array) - Array of error messages for failed deletions
+
+**Error Responses:**
+
+- **403 Forbidden** - Not admin:
+```json
+{
+  "detail": "You do not have permission to perform this action."
+}
+```
+
+- **400 Bad Request** - Validation error:
+```json
+{
+  "success": false,
+  "error": "chapter_ids is required and must be a non-empty list",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - All chapters failed:
+```json
+{
+  "success": false,
+  "error": "No chapters were deleted",
+  "error_code": "BULK_DELETE_FAILED",
+  "deleted_count": 0,
+  "deleted_ids": [],
+  "failed_count": 3,
+  "failed_ids": ["uuid-string-1", "uuid-string-2", "uuid-string-3"],
+  "errors": [
+    "Chapter not found: uuid-string-1",
+    "Chapter not found: uuid-string-2",
+    "Chapter not found: uuid-string-3"
+  ]
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to bulk delete chapters: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Notes:**
+- The endpoint processes all chapter IDs even if some fail
+- Invalid UUID formats are skipped and added to the failed list
+- Chapters that don't exist are skipped and added to the failed list
+- The response includes detailed information about what succeeded and what failed
+- If all chapters fail to delete, the endpoint returns a 400 error with details
+
+---
+
+### 10.12 Admin Update Book Metadata
+**Endpoint:** `POST /admin/book/update-metadata`  
+**Authentication:** Required (JWT)  
+**Permission:** Admin only (`is_staff=True`)
+
+**Request Body:**
+```json
+{
+  "book_id": "string (required)",
+  "metadata": "string (required) - JSON string containing metadata"
+}
+```
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Book metadata updated successfully"
+}
+```
+
+**Error Responses:**
+
+- **403 Forbidden** - Not admin:
+```json
+{
+  "detail": "You do not have permission to perform this action."
+}
+```
+
+- **400 Bad Request** - Validation error:
+```json
+{
+  "success": false,
+  "error": "book_id is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Missing metadata:
+```json
+{
+  "success": false,
+  "error": "metadata is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **404 Not Found:**
+```json
+{
+  "success": false,
+  "error": "Book not found",
+  "error_code": "BOOK_NOT_FOUND"
+}
+```
+
+---
+
+### 10.13 Admin Get All Books
+**Endpoint:** `GET /admin/books`  
+**Authentication:** Required (JWT)  
+**Permission:** Admin only (`is_staff=True`)
+
+**Query Parameters:**
+- `limit` (integer, optional) - Maximum number of books to return (if not provided, returns all)
+- `offset` (integer, optional, default: 0) - Number of books to skip
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Books retrieved successfully",
+  "data": [
+    {
+      "book_id": "uuid-string",
+      "title": "The Book of Genesis",
+      "description": "string",
+      "category_id": "uuid-string",
+      "age_group_id": "uuid-string",
+      "language_id": "uuid-string",
+      "cover_image_url": "https://s3.amazonaws.com/bucket/books/cover_images/...",
+      "source_file_url": "https://s3.amazonaws.com/bucket/books/.../source_files/...",
+      "book_order": 1,
+      "created_at": "2024-01-15T10:30:00Z",
+      "updated_at": "2024-01-15T10:30:00Z"
+    }
+  ],
+  "pagination": {
+    "limit": 10,
+    "offset": 0,
+    "total_count": 50,
+    "has_next": true,
+    "has_previous": false
+  }
+}
+```
+
+**Error Responses:**
+
+- **403 Forbidden** - Not admin:
+```json
+{
+  "detail": "You do not have permission to perform this action."
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to retrieve books: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+---  
+**Authentication:** Required (JWT)  
+**Permission:** Admin only (`is_staff=True`)  
+**Content-Type:** `multipart/form-data`
+
+**Request Body (Form Data):**
+- `book_id` (string, required) - Book ID (UUID)
+- `bookdata` (JSON string, required) - Array of chapter objects:
+  ```json
+  [
+    {
+      "title": "string (required)",
+      "description": "string (required)",
+      "metadata": {} // optional JSON object per chapter
+    }
+  ]
+  ```
+- `file_0`, `file_1`, `file_2`, ... (files, required) - Files indexed to match bookdata array order
+
+**Note:** Files are sent as separate fields (`file_0`, `file_1`, etc.) and matched by index to the bookdata array.
+
+**Success Response (201 Created):**
+```json
+{
+  "success": true,
+  "message": "Chapters uploaded successfully",
+  "chaptersCount": 3,
+  "book_id": "uuid-string"
+}
+```
+
+**Error Responses:**
+
+- **403 Forbidden** - Not admin:
+```json
+{
+  "detail": "You do not have permission to perform this action."
+}
+```
+
+- **400 Bad Request** - Validation error:
+```json
+{
+  "success": false,
+  "error": "Book ID is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Invalid JSON:
+```json
+{
+  "success": false,
+  "error": "Invalid JSON format for bookdata",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Book not found:
+```json
+{
+  "success": false,
+  "error": "Book with id '<book_id>' does not exist",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Missing chapter fields:
+```json
+{
+  "success": false,
+  "error": "Title is required for chapter at index 0",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - File count mismatch:
+```json
+{
+  "success": false,
+  "error": "Number of files (2) must match number of chapters (3)",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **500 Internal Server Error** - S3 upload error:
+```json
+{
+  "success": false,
+  "error": "Failed to upload file for chapter at index 0: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+- **500 Internal Server Error** - Chapter creation error:
+```json
+{
+  "success": false,
+  "error": "Failed to create chapter at index 0: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Notes:**
+- Chapter numbers are auto-incremented starting from max existing chapter_number + 1
+- Files are uploaded to S3 in path: `books/{sanitized_book_title}/chapters/{original_filename}`
+- Each chapter can have its own metadata JSON object
+- Files must use indexed keys: `file_0`, `file_1`, `file_2`, etc.
+
+---
+
+## 11. Books APIs
+
+### 11.1 Get All Categories
+**Endpoint:** `GET /books/categories/`  
+**Authentication:** Required (JWT)
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Categories retrieved successfully",
+  "data": [
+    {
+      "category_id": "uuid-string",
+      "category_name": "SEGREGATE_BIBLES",
+      "display_name": "Segregated Bibles",
+      "cover_image_url": "https://s3.amazonaws.com/bucket/categories/cover_images/...",
+      "description": "Bibles with age-specific content",
+      "display_order": 0,
+      "created_at": "2024-01-15T10:30:00Z",
+      "updated_at": "2024-01-15T10:30:00Z"
+    }
+  ]
+}
+```
+
+**Error Responses:**
+
+- **401 Unauthorized** - Missing or invalid token:
+```json
+{
+  "detail": "Authentication credentials were not provided."
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to retrieve categories: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+---
+
+### 11.2 Get All Age Groups
+**Endpoint:** `GET /books/age-groups/`  
+**Authentication:** Required (JWT)
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Age groups retrieved successfully",
+  "data": [
+    {
+      "age_group_id": "uuid-string",
+      "age_group_name": "CHILD",
+      "display_name": "Child",
+      "cover_image_url": "https://s3.amazonaws.com/bucket/age_groups/cover_images/...",
+      "description": "Books for children",
+      "display_order": 0,
+      "created_at": "2024-01-15T10:30:00Z",
+      "updated_at": "2024-01-15T10:30:00Z"
+    }
+  ]
+}
+```
+
+**Error Responses:**
+
+- **401 Unauthorized** - Missing or invalid token:
+```json
+{
+  "detail": "Authentication credentials were not provided."
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to retrieve age groups: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+---
+
+### 11.3 Get Books by Category and Age Group (POST)
+**Endpoint:** `POST /books/get`  
+**Authentication:** Required (JWT)
+
+**Request Body:**
+```json
+{
+  "category_id": "uuid-string (required)",
+  "age_group": "uuid-string (required)"  // OR "age_group_id": "uuid-string"
+}
+```
+
+**Note:** The endpoint accepts either `age_group` or `age_group_id` in the request body.
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Books retrieved successfully",
+  "data": [
+    {
+      "book_id": "uuid-string",
+      "title": "The Book of Genesis",
+      "description": "string",
+      "category_id": "uuid-string",
+      "age_group_id": "uuid-string",
+      "language_id": "uuid-string",
+      "cover_image_url": "https://s3.amazonaws.com/bucket/books/cover_images/...",
+      "book_order": 0,
+      "is_active": true,
+      "created_at": "2024-01-01T12:00:00",
+      "updated_at": "2024-01-01T12:00:00"
+    }
+  ]
+}
+```
+
+**Error Responses:**
+
+- **401 Unauthorized** - Missing or invalid token:
+```json
+{
+  "detail": "Authentication credentials were not provided."
+}
+```
+
+- **400 Bad Request** - Missing category:
+```json
+{
+  "success": false,
+  "error": "Category is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Missing age group:
+```json
+{
+  "success": false,
+  "error": "Age group is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Category not found:
+```json
+{
+  "success": false,
+  "error": "Category with id '<category_id>' does not exist",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Age group not found:
+```json
+{
+  "success": false,
+  "error": "Age group with id '<age_group_id>' does not exist",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to retrieve books: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+---
+
+### 11.3.1 Get Books by Category and Age Group (GET)
+**Endpoint:** `GET /books/?category_id=<uuid>&age_group_id=<uuid>`  
+**Authentication:** Required (JWT)
+
+**Query Parameters:**
+- `category_id` (string, required) - UUID of the category
+- `age_group_id` (string, required) - UUID of the age group
+
+**Example Request:**
+```
+GET /books/?category_id=123e4567-e89b-12d3-a456-426614174000&age_group_id=123e4567-e89b-12d3-a456-426614174001
+Headers: Authorization: Bearer <access_token>
+```
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Books retrieved successfully",
+  "data": [
+    {
+      "book_id": "uuid-string",
+      "title": "The Book of Genesis",
+      "description": "string",
+      "category_id": "uuid-string",
+      "age_group_id": "uuid-string",
+      "language_id": "uuid-string",
+      "cover_image_url": "https://s3.amazonaws.com/bucket/books/cover_images/...",
+      "book_order": 0,
+      "is_active": true,
+      "created_at": "2024-01-01T12:00:00",
+      "updated_at": "2024-01-01T12:00:00"
+    }
+  ]
+}
+```
+
+**Error Responses:**
+
+- **401 Unauthorized** - Missing or invalid token:
+```json
+{
+  "detail": "Authentication credentials were not provided."
+}
+```
+
+- **400 Bad Request** - Missing category:
+```json
+{
+  "success": false,
+  "error": "Category is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Missing age group:
+```json
+{
+  "success": false,
+  "error": "Age group is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Category not found:
+```json
+{
+  "success": false,
+  "error": "Category with id '<category_id>' does not exist",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Age group not found:
+```json
+{
+  "success": false,
+  "error": "Age group with id '<age_group_id>' does not exist",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to retrieve books: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+---
+
+
+### 11.4 Get Book Chapters
+**Endpoint:** `POST /books/chapters/get`  
+**Authentication:** Required (JWT)
+
+**Request Body:**
+```json
+{
+  "book_id": "uuid-string (required)"
+}
+```
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Chapters retrieved successfully",
+  "data": [
+    {
+      "chapter_id": "uuid-string",
+      "book_id": "uuid-string",
+      "title": "string",
+      "description": "string",
+      "chapter_number": 1,
+      "chapter_name": "string or null",
+      "chapter_url": "string or null",
+      "metadata": {},
+      "created_at": "2024-01-01T12:00:00",
+      "updated_at": "2024-01-01T12:00:00"
+    }
+  ]
+}
+```
+
+**Error Responses:**
+
+- **401 Unauthorized** - Missing or invalid token:
+```json
+{
+  "detail": "Authentication credentials were not provided."
+}
+```
+
+- **400 Bad Request** - Validation error:
+```json
+{
+  "success": false,
+  "error": "Book ID is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Book not found:
+```json
+{
+  "success": false,
+  "error": "Book with id '<book_id>' does not exist",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to retrieve chapters: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Notes:**
+- Chapters are returned ordered by `chapter_number` (ascending)
+- Returns empty array `[]` if no chapters found for the book
+
+---
+
+### 11.5 Search Chapters
+**Endpoint:** `POST /books/search`  
+**Authentication:** Required (JWT)
+
+**Description:**  
+Search for text within chapter blocks using Elasticsearch. Returns matching text blocks with their associated chapter information, including highlighted matched text. Supports fuzzy matching for typo tolerance.
+
+**Request Body:**
+```json
+{
+  "book_id": "uuid-string (required)",
+  "language_id": "uuid-string (required)",
+  "search_text": "string (required)"
+}
+```
+
+**Example Request:**
+```json
+{
+  "book_id": "123e4567-e89b-12d3-a456-426614174000",
+  "language_id": "123e4567-e89b-12d3-a456-426614174001",
+  "search_text": "town"
+}
+```
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Search completed successfully",
+  "data": {
+    "results": [
+      {
+        "block_id": "block-0",
+        "text": "At dawn, the town of Bracken Hollow",
+        "highlighted_text": "At dawn, the <mark>town</mark> of Bracken Hollow",
+        "chapter_id": "d442a669-d96d-46a2-8b90-5b1beefb795a",
+        "chapter_name": "Untitled document (1)"
+      },
+      {
+        "block_id": "block-289",
+        "text": "And Jehovah came down to see the city and the tower, which the children of men builded",
+        "highlighted_text": "And Jehovah came down to see the <mark>city</mark> and the tower, which the children of men builded",
+        "chapter_id": "ddb8fbdc-6f46-40ee-8388-c2f9374fe1e0",
+        "chapter_name": "Genesis"
+      }
+    ],
+    "total_results": 64
+  }
+}
+```
+
+**Response Fields:**
+- `block_id` (string) - Unique identifier of the text block
+- `text` (string) - Original text content without highlighting
+- `highlighted_text` (string, optional) - Text with `<mark>` tags around matched portions. Only present when matches are found.
+- `chapter_id` (string) - UUID of the chapter containing this block
+- `chapter_name` (string) - Name of the chapter
+- `total_results` (number) - Total number of matching results
+
+**Error Responses:**
+
+- **401 Unauthorized** - Missing or invalid token:
+```json
+{
+  "detail": "Authentication credentials were not provided."
+}
+```
+
+- **400 Bad Request** - Missing book_id:
+```json
+{
+  "success": false,
+  "error": "book_id is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Missing language_id:
+```json
+{
+  "success": false,
+  "error": "language_id is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Missing search_text:
+```json
+{
+  "success": false,
+  "error": "search_text is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to perform search: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Notes:**
+- Uses Elasticsearch for fast full-text search across chapter metadata blocks
+- Supports fuzzy matching with automatic typo tolerance
+- Results are returned with relevance scoring
+- Search is case-insensitive
+- Searches within the `text` field of chapter blocks
+- **Highlighting**: Matched text is wrapped in `<mark>` tags in the `highlighted_text` field
+- Highlighting shows up to 3 fragments of 150 characters each around matches
+- Multiple matches in the same block are separated by " ... "
+- Frontend should render `<mark>` tags with CSS styling (e.g., yellow background)
+- If no highlighting is available, use the `text` field as fallback
+- Both `book_id` and `language_id` are used as filters to narrow down search scope
+- Maximum 100 results returned per request (pagination can be added if needed)
+
+**Search Features:**
+- **Full-text search:** Matches words within block text content
+- **Fuzzy matching:** Tolerates typos (e.g., "twon" will match "town")
+- **Fast performance:** Optimized for large datasets using Elasticsearch inverted index
+- **Relevance ranking:** Results sorted by relevance to search query
+
+---
+
+### 11.6 Get All Books
+**Endpoint:** `GET /books/all`  
+**Authentication:** Required (JWT)
+
+**Description:**  
+Retrieves all active books with their IDs and titles. This is a simplified endpoint for populating dropdowns or selection lists.
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Books retrieved successfully",
+  "data": [
+    {
+      "book_id": "uuid-string",
+      "title": "Genesis"
+    },
+    {
+      "book_id": "uuid-string",
+      "title": "Exodus"
+    },
+    {
+      "book_id": "uuid-string",
+      "title": "Leviticus"
+    }
+  ],
+  "total_count": 66
+}
+```
+
+**Response Fields:**
+- `book_id` (string) - Unique book identifier (UUID)
+- `title` (string) - Book title
+- `total_count` (integer) - Total number of active books
+
+**Error Responses:**
+
+- **401 Unauthorized** - Missing or invalid token:
+```json
+{
+  "detail": "Authentication credentials were not provided."
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to retrieve books: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Notes:**
+- Returns only active books (`is_active=True`)
+- Books are ordered by `book_order` and `title`
+- Returns minimal data (only ID and title) for efficiency
+- Accessible to any authenticated user (not admin-only)
+- Perfect for dropdown menus and selection lists in frontend
+
+---
+
+### 11.7 Get All Languages
+**Endpoint:** `GET /languages/all`  
+**Authentication:** Required (JWT)
+
+**Description:**  
+Retrieves all available languages with their IDs and display names. This is a public endpoint accessible to any authenticated user.
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Languages retrieved successfully",
+  "data": [
+    {
+      "language_id": "uuid-string",
+      "language_name": "EN",
+      "display_name": "English"
+    },
+    {
+      "language_id": "uuid-string",
+      "language_name": "ES",
+      "display_name": "Spanish"
+    },
+    {
+      "language_id": "uuid-string",
+      "language_name": "FR",
+      "display_name": "French"
+    }
+  ]
+}
+```
+
+**Response Fields:**
+- `language_id` (string) - Unique language identifier (UUID)
+- `language_name` (string) - Language code (e.g., "EN", "ES", "FR")
+- `display_name` (string) - Human-readable language name (e.g., "English", "Spanish")
+
+**Error Responses:**
+
+- **401 Unauthorized** - Missing or invalid token:
+```json
+{
+  "detail": "Authentication credentials were not provided."
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to retrieve languages: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Notes:**
+- Returns all languages ordered by `language_name`
+- Accessible to any authenticated user (not admin-only)
+- The admin equivalent endpoint (`GET /admin/languages`) still exists for admin panel use
+- Perfect for language selection dropdowns in frontend
+- Includes both language code and display name for flexibility
+
+---
+
+## 12. Highlight APIs
+
+### 12.1 Create Highlight
+**Endpoint:** `POST /highlight/create`  
+**Authentication:** Required (JWT)
+
+**Description:**
+Creates a highlight for a specific text selection within a chapter. The highlight is associated with a book, chapter, and optional block, allowing users to mark and save important passages.
+
+**Request Body:**
+```json
+{
+  "book_id": "uuid-string (required)",
+  "chapter_id": "uuid-string (required)",
+  "block_id": "uuid-string (optional)",
+  "start_offset": "string (required)",
+  "end_offset": "string (required)",
+  "color": "string (optional, default: 'yellow')"
+}
+```
+
+**Example Request:**
+```json
+{
+  "book_id": "123e4567-e89b-12d3-a456-426614174000",
+  "chapter_id": "d442a669-d96d-46a2-8b90-5b1beefb795a",
+  "block_id": "block-5",
+  "start_offset": "10",
+  "end_offset": "50",
+  "color": "yellow"
+}
+```
+
+**Success Response (201 Created):**
+```json
+{
+  "success": true,
+  "message": "Highlight created successfully",
+  "highlight_id": "uuid-string"
+}
+```
+
+**Error Responses:**
+
+- **401 Unauthorized** - Missing or invalid token:
+```json
+{
+  "detail": "Authentication credentials were not provided."
+}
+```
+
+- **400 Bad Request** - Missing book_id:
+```json
+{
+  "success": false,
+  "error": "book_id is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Missing chapter_id:
+```json
+{
+  "success": false,
+  "error": "chapter_id is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Missing start_offset:
+```json
+{
+  "success": false,
+  "error": "start_offset is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Missing end_offset:
+```json
+{
+  "success": false,
+  "error": "end_offset is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **404 Not Found** - Book not found:
+```json
+{
+  "success": false,
+  "error": "Book not found",
+  "error_code": "BOOK_NOT_FOUND"
+}
+```
+
+- **404 Not Found** - Chapter not found:
+```json
+{
+  "success": false,
+  "error": "Chapter not found",
+  "error_code": "CHAPTER_NOT_FOUND"
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to create highlight: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Notes:**
+- The `block_id` is optional and can be used to specify a particular block within the chapter
+- Default highlight color is 'yellow' if not specified
+- `start_offset` and `end_offset` define the text selection boundaries
+- The response includes the unique `highlight_id` which can be used for future operations
+
+---
+
+### 12.2 Get Highlights
+**Endpoint:** `GET /highlight/book/<book_id>`  
+**Authentication:** Required (JWT)
+
+**Description:**
+Retrieves all highlights created by the authenticated user for a specific book.
+
+**Path Parameters:**
+- `book_id` (string, required) - The UUID of the book
+
+**Example Request:**
+```
+GET /highlight/book/123e4567-e89b-12d3-a456-426614174000
+Authorization: Bearer <jwt_token>
+```
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Highlights retrieved successfully",
+  "data": [
+    {
+      "highlight_id": "uuid-string",
+      "book_id": "uuid-string",
+      "block_id": "uuid-string or null",
+      "start_offset": "string",
+      "end_offset": "string",
+      "color": "yellow",
+      "created_at": "2024-01-01T12:00:00",
+      "updated_at": "2024-01-01T12:00:00"
+    }
+  ]
+}
+```
+
+**Error Responses:**
+
+- **401 Unauthorized** - Missing or invalid token:
+```json
+{
+  "detail": "Authentication credentials were not provided."
+}
+```
+
+- **400 Bad Request** - Missing book_id:
+```json
+{
+  "success": false,
+  "error": "book_id is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **404 Not Found** - Book not found:
+```json
+{
+  "success": false,
+  "error": "Book not found",
+  "error_code": "BOOK_NOT_FOUND"
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to retrieve highlights: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Notes:**
+- Returns highlights **only for the authenticated user**
+- Returns an empty array `[]` if no highlights are found
+- Highlights are ordered by creation date (newest first)
+- `block_id` will be `null` if the highlight is not associated with a specific block
+
+---
+
+### 12.3 Delete Highlight
+**Endpoint:** `DELETE /highlight/delete`  
+**Authentication:** Required (JWT)
+
+**Description:**
+Deletes a specific highlight. Users can only delete their own highlights.
+
+**Request Body:**
+```json
+{
+  "highlight_id": "uuid-string (required)"
+}
+```
+
+**Example Request:**
+```json
+{
+  "highlight_id": "123e4567-e89b-12d3-a456-426614174000"
+}
+```
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Highlight deleted successfully"
+}
+```
+
+**Error Responses:**
+
+- **401 Unauthorized** - Missing or invalid token:
+```json
+{
+  "detail": "Authentication credentials were not provided."
+}
+```
+
+- **400 Bad Request** - Missing highlight_id:
+```json
+{
+  "success": false,
+  "error": "highlight_id is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **404 Not Found** - Highlight not found:
+```json
+{
+  "success": false,
+  "error": "Highlight not found",
+  "error_code": "HIGHLIGHT_NOT_FOUND"
+}
+```
+
+- **403 Forbidden** - Not authorized to delete:
+```json
+{
+  "success": false,
+  "error": "You are not authorized to delete this highlight",
+  "error_code": "UNAUTHORIZED"
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to delete highlight: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Notes:**
+- Users can only delete their own highlights
+- Returns `403 Forbidden` if attempting to delete another user's highlight
+- Deletion is permanent and cannot be undone
+
+---
+
+## 13. Reading Note APIs
+
+### 13.1 Create Reading Note
+**Endpoint:** `POST /reading-note/create`  
+**Authentication:** Required (JWT)
+
+**Request Body:**
+```json
+{
+  "book_id": "string (required)",
+  "content": "string (required)",
+  "chapter_id": "string (optional)",
+  "block_id": "string (required)"
+}
+```
+
+**Note:** If `chapter_id` is not provided, a new UUID will be automatically generated.
+
+**Success Response (201 Created):**
+```json
+{
+  "success": true,
+  "message": "Reading note created successfully",
+  "note_id": "uuid-string"
+}
+```
+
+**Error Responses:**
+
+- **400 Bad Request** - Validation error:
+```json
+{
+  "success": false,
+  "error": "book_id is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Missing required field:
+```json
+{
+  "success": false,
+  "error": "content is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Missing block_id:
+```json
+{
+  "success": false,
+  "error": "block_id is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **404 Not Found** - Book not found:
+```json
+{
+  "success": false,
+  "error": "Book not found",
+  "error_code": "BOOK_NOT_FOUND"
+}
+```
+
+- **404 Not Found** - User not found:
+```json
+{
+  "success": false,
+  "error": "User not found",
+  "error_code": "USER_NOT_FOUND"
+}
+```
+
+- **401 Unauthorized** - Missing or invalid token:
+```json
+{
+  "detail": "Authentication credentials were not provided."
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to create reading note: <error_message>",
+  "error": "Failed to create share link: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+---
+
+### 13.2 Get Reading Notes
+**Endpoint:** `GET /reading-note/book/<book_id>`  
+**Authentication:** Required (JWT)
+
+**Path Parameters:**
+- `book_id` (string, required) - The ID of the book
+
+**Query Parameters:**
+- `user_id` (string, optional) - User ID to get reading notes for. If not provided, returns reading notes for the authenticated user.
+### 12.3 View Shared Post
+**Endpoint:** `GET /s/p/<token>`  
+**Authentication:** Required (JWT)
+
+**Path Parameters:**
+- `token` (string, required) - The share token from the share link
+
+**Description:**
+View a shared post using the short share link. Users must be authenticated to view shared content. If a user is not authenticated, they will receive a 401 error and should be redirected to signup/login, then redirected back to the share link.
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Reading notes retrieved successfully",
+  "data": [
+    {
+      "note_id": "uuid-string",
+      "book_id": "uuid-string",
+      "user_id": "uuid-string",
+      "content": "string",
+      "chapter_id": "uuid-string or null",
+      "block_id": "uuid-string"
+    }
+  ]
+  "message": "Post retrieved successfully",
+  "data": {
+    "post_id": "uuid-string",
+    "user": {
+      "user_id": "uuid-string",
+      "user_name": "string",
+      "profile_picture_url": "string"
+    },
+    "title": "string",
+    "description": "string",
+    "media": [
+      {
+        "media_id": "uuid-string",
+        "media_type": "image|video|audio",
+        "url": "string"
+      }
+    ],
+    "likes_count": 10,
+    "comments_count": 5,
+    "created_at": "2024-01-01T12:00:00",
+    "updated_at": "2024-01-01T12:00:00"
+  }
+}
+```
+
+**Error Responses:**
+
+- **400 Bad Request** - Validation error:
+```json
+{
+  "success": false,
+  "error": "book_id is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - User ID required:
+```json
+{
+  "success": false,
+  "error": "user_id is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **404 Not Found** - Book not found:
+```json
+{
+  "success": false,
+  "error": "Book not found",
+  "error_code": "BOOK_NOT_FOUND"
+- **401 Unauthorized** - Not authenticated:
+```json
+{
+  "detail": "Authentication credentials were not provided."
+}
+```
+
+**Note:** Frontend should redirect unauthenticated users to signup/login with `return_url` parameter, then redirect back after authentication.
+
+- **404 Not Found** - Invalid token:
+```json
+{
+  "success": false,
+  "error": "Invalid or expired share link",
+  "error_code": "INVALID_SHARE_TOKEN"
+}
+```
+
+- **404 Not Found** - Post deleted:
+```json
+{
+  "success": false,
+  "error": "Post no longer available",
+  "error_code": "POST_NOT_FOUND"
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to retrieve reading notes: <error_message>",
+  "error": "Failed to retrieve shared post: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+---
+
+### 13.3 Update Reading Note
+**Endpoint:** `PUT /reading-note/update` or `PATCH /reading-note/update`  
+**Authentication:** Required (JWT)
+
+**Request Body:**
+```json
+{
+  "note_id": "string (required)",
+  "content": "string (required)"
+}
+```
+### 12.4 View Shared Profile
+**Endpoint:** `GET /s/u/<token>`  
+**Authentication:** Required (JWT)
+
+**Path Parameters:**
+- `token` (string, required) - The share token from the share link
+
+**Description:**
+View a shared user profile using the short share link. Users must be authenticated to view shared content. If a user is not authenticated, they will receive a 401 error and should be redirected to signup/login, then redirected back to the share link.
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Reading note updated successfully",
+  "note_id": "uuid-string"
+  "message": "Profile retrieved successfully",
+  "data": {
+    "user_id": "uuid-string",
+    "user_name": "string",
+    "email": "string",
+    "country": "string",
+    "age": "integer",
+    "preferred_language": "string",
+    "profile_picture_url": "string",
+    "is_admin": "boolean",
+    "followers_count": "integer",
+    "following_count": "integer"
+  }
+}
+```
+
+**Error Responses:**
+
+- **400 Bad Request** - Validation error:
+```json
+{
+  "success": false,
+  "error": "note_id is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **400 Bad Request** - Missing content:
+```json
+{
+  "success": false,
+  "error": "content is required",
+  "error_code": "VALIDATION_ERROR"
+}
+```
+
+- **404 Not Found:**
+```json
+{
+  "success": false,
+  "error": "Reading note not found",
+  "error_code": "NOTE_NOT_FOUND"
+}
+```
+
+- **403 Forbidden** - Unauthorized:
+```json
+{
+  "success": false,
+  "error": "You are not authorized to update this reading note",
+  "error_code": "UNAUTHORIZED"
+- **401 Unauthorized** - Not authenticated:
+```json
+{
+  "detail": "Authentication credentials were not provided."
+}
+```
+
+**Note:** Frontend should redirect unauthenticated users to signup/login with `return_url` parameter, then redirect back after authentication.
+
+- **404 Not Found** - Invalid token:
+```json
+{
+  "success": false,
+  "error": "Invalid or expired share link",
+  "error_code": "INVALID_SHARE_TOKEN"
+}
+```
+
+- **404 Not Found** - User deleted or deactivated:
+```json
+{
+  "success": false,
+  "error": "Profile no longer available",
+  "error_code": "USER_NOT_FOUND"
+}
+```
+
+- **500 Internal Server Error:**
+```json
+{
+  "success": false,
+  "error": "Failed to update reading note: <error_message>",
+  "error": "Failed to retrieve shared profile: <error_message>",
+  "error_code": "INTERNAL_ERROR"
+}
+```
+
+**Notes:**
+- Share links are short URLs (e.g., `/s/p/{token}` for posts, `/s/u/{token}` for profiles)
+- All share link endpoints require authentication to encourage user signups
+- If a share link already exists for the same content and user, the existing link is returned
+- Share links do not expire (unless manually deactivated by admin)
+- Frontend should handle authentication redirects: detect 401 → redirect to login with `return_url` → redirect back after auth
+
+---
+
 ## Common Error Codes
 
 | Error Code | Description |
@@ -1700,6 +4634,9 @@ Authorization: Bearer <access_token>
 | `POST_NOT_FOUND` | Post does not exist |
 | `PRAYER_REQUEST_NOT_FOUND` | Prayer request does not exist |
 | `VERSE_NOT_FOUND` | Verse not found in database |
+| `BOOK_NOT_FOUND` | Book does not exist |
+| `HIGHLIGHT_NOT_FOUND` | Highlight does not exist |
+| `NOTE_NOT_FOUND` | Reading note does not exist |
 | `ALREADY_FOLLOWING` | Already following the user |
 | `CANNOT_FOLLOW_YOURSELF` | Cannot follow your own account |
 | `ALREADY_LIKED` | Already liked the post/comment/prayer request |
@@ -1709,6 +4646,7 @@ Authorization: Bearer <access_token>
 | `INVALID_MEDIA_TYPE` | Media file type not supported |
 | `NO_MEDIA_PROVIDED` | No media files in request |
 | `S3_UPLOAD_ERROR` | Failed to upload to S3 storage |
+| `INVALID_SHARE_TOKEN` | Invalid or expired share link token |
 | `INTERNAL_ERROR` | Internal server error |
 | `INTERNAL_SERVER_ERROR` | Unexpected server error |
 
@@ -1730,4 +4668,6 @@ Authorization: Bearer <access_token>
 5. **Error Responses:** All error responses follow a consistent format with `success: false`, `error` message, and `error_code`.
 
 6. **User Interaction Flags:** Posts include `is_liked` and `is_commented` flags indicating if the current authenticated user has liked or commented. Comments include `is_liked` flag indicating if the current authenticated user has liked the comment.
+
+7. **Share Links:** Share links require authentication to view shared content. This encourages user signups and growth. Unauthenticated users receive 401 errors and should be redirected to signup/login with the share link as the return URL. Share links use short URLs (`/s/p/{token}` for posts, `/s/u/{token}` for profiles) for easy sharing.
 
