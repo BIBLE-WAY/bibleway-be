@@ -27,11 +27,8 @@ COPY . .
 # Create staticfiles directory
 RUN mkdir -p /app/staticfiles
 
-# Collect static files during build (ignore errors if env vars not set)
-RUN python manage.py collectstatic --noinput || true
-
 # Expose port
 EXPOSE 8080
 
-# Start command - skip migrations if they fail, server will still start
-CMD sh -c "python manage.py migrate --noinput || echo 'Migration warning - continuing anyway' && gunicorn bible_way_backend.wsgi:application --bind 0.0.0.0:8080 --workers 2 --threads 4 --timeout 120"
+# Start command - collectstatic and migrate at runtime, then start server
+CMD sh -c "python manage.py collectstatic --noinput && (python manage.py migrate --noinput || echo 'Migration skipped') && gunicorn bible_way_backend.wsgi:application --bind 0.0.0.0:8080 --workers 2 --threads 4 --timeout 120"
