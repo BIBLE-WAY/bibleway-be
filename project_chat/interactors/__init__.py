@@ -1,2 +1,0 @@
-# Interactors for chat functionality
-

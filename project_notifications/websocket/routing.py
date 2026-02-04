@@ -1,9 +1,6 @@
-"""
-WebSocket URL routing configuration for notifications.
+from django.urls import re_path
+from . import consumers
 
-Notifications are now handled through the unified ws/user/ connection.
-This file is kept for potential future use but currently has no routes.
-"""
-
-websocket_urlpatterns = []
-
+websocket_urlpatterns = [
+    re_path(r'^ws/notifications/$', consumers.NotificationConsumer.as_asgi()),
+]

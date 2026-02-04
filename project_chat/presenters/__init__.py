@@ -1,2 +1,0 @@
-# Presenters for chat functionality
-

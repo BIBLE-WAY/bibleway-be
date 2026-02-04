@@ -234,18 +234,7 @@ class UserDB:
                 ).exists()
                 user_data['is_following'] = is_following
                 
-                # Check if conversation exists between current user and searched user
-                try:
-                    from project_chat.storage import ChatDB
-                    chat_db = ChatDB()
-                    conversation = chat_db.find_conversation_between_users(
-                        current_user_id,
-                        str(user.user_id)
-                    )
-                    user_data['conversation_id'] = str(conversation.id) if conversation else None
-                except Exception as e:
-                    # If conversation table doesn't exist or other error, set to None
-                    user_data['conversation_id'] = None
+                user_data['conversation_id'] = None
             else:
                 user_data['is_following'] = False
                 user_data['conversation_id'] = None
@@ -423,18 +412,7 @@ class UserDB:
                     followed_id__user_id=user_uuid
                 ).exists()
                 
-                # Check if conversation exists between current user and profile user
-                try:
-                    from project_chat.storage import ChatDB
-                    chat_db = ChatDB()
-                    conversation = chat_db.find_conversation_between_users(
-                        current_user_id,
-                        str(user.user_id)
-                    )
-                    conversation_id = str(conversation.id) if conversation else None
-                except Exception as e:
-                    # If conversation table doesn't exist or other error, set to None
-                    conversation_id = None
+                conversation_id = None
             except (ValueError, TypeError):
                 is_following = False
                 conversation_id = None

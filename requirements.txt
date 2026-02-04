@@ -1,40 +1,18 @@
-# Django Core
 Django>=5.2.0,<6.0.0
-
-# Django REST Framework
 djangorestframework>=3.14.0
 djangorestframework-simplejwt>=5.2.0
-
-# WebSocket Support (Django Channels)
 channels>=4.0.0
 daphne>=4.0.0
-# Optional for production with Redis:
-# channels-redis>=4.0.0
-
-# CORS Headers
 django-cors-headers>=4.0.0
-
-# AWS S3 Storage
 django-storages>=1.14.0
 boto3>=1.26.0
-
-# Image Processing (required for ImageField)
 Pillow>=10.0.0
-
-# Environment Variables
 python-dotenv>=1.0.0
-
-# WebSocket Testing
-websockets>=12.0
-
-# Elasticsearch
 elasticsearch>=8.0.0
 elasticsearch-dsl>=8.0.0
-
-# Database (MySQL for Production)
-mysqlclient>=2.1.0
-# Google Cloud Text-to-Speech
 google-cloud-texttospeech>=2.16.0
-
-# Audio Processing (for MP3 duration calculation)
 mutagen>=1.47.0
+gunicorn>=21.0.0
+psycopg2-binary>=2.9.0
+whitenoise>=6.6.0
+dj-database-url>=2.0.0
