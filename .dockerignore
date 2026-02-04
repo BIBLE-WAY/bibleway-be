@@ -1,0 +1,46 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Local files
+*.log
+*.sqlite3
+db.sqlite3
+.DS_Store
+
+# Documentation
+*.md
+!README.md
+
+# Scripts (local only)
+deploy-to-railway.sh
+upload-env-to-railway.sh
+
+# Static files (will be generated)
+staticfiles/
+
+# Media files (stored in R2)
+media/
