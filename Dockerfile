@@ -5,7 +5,6 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV DJANGO_SETTINGS_MODULE=bible_way_backend.settings
-ENV PORT=8080
 
 # Set work directory
 WORKDIR /app
@@ -28,12 +27,11 @@ COPY . .
 # Create staticfiles directory
 RUN mkdir -p /app/staticfiles
 
-# Make entrypoint script executable
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# Collect static files during build
+RUN python manage.py collectstatic --noinput || true
 
 # Expose port
 EXPOSE 8080
 
-# Run entrypoint script
-ENTRYPOINT ["/entrypoint.sh"]
+# Start command - Railway will inject PORT
+CMD python manage.py migrate --noinput && gunicorn bible_way_backend.wsgi:application --bind 0.0.0.0:8080 --workers 2 --threads 4 --timeout 120
