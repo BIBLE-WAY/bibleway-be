@@ -57,7 +57,7 @@ CORS_ALLOW_HEADERS = [
     'content-type', 'content-length', 'dnt', 'origin', 'referer',
     'user-agent', 'x-csrftoken', 'x-requested-with', 'x-forwarded-for',
     'x-forwarded-proto', 'cache-control', 'pragma', 'sec-ch-ua',
-    'sec-ch-ua-mobile', 'sec-ch-ua-platform',
+    'sec-ch-ua-mobile', 'sec-ch-ua-platform', 'ngrok-skip-browser-warning',
 ]
 CORS_EXPOSE_HEADERS = ['content-type', 'authorization', 'x-csrftoken']
 CORS_PREFLIGHT_MAX_AGE = 3600
